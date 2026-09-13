@@ -1,0 +1,65 @@
+import {
+  CommandPermissionLevel,
+  CustomCommandStatus,
+  PlayerPermissionLevel,
+  system,
+  world,
+} from "@minecraft/server";
+import { ActionFormData, MessageFormData, ModalFormData } from "@minecraft/server-ui";
+
+const VERSION = "1.0.0";
+const MENU_ITEM = "minecraft:compass";
+const CREATE_ITEM = "minecraft:oak_sign";
+const CHEST_ID = "minecraft:chest";
+const BRIDGE_OBJECTIVE = "gui_bridge";
+const BRIDGE_SELF = "shop";
+const BRIDGE_PEERS = ["myland", "survival"];
+const BRIDGE_TTL = 4;
+const BRIDGE_TAG_MENU = "bridge:playershop_menu";
+const BRIDGE_TAG_ADMIN = "bridge:playershop_admin";
+const LAND_MENU_TAG = "bridge:myland_menu";
+const LAND_ADMIN_TAG = "bridge:myland_admin";
+const SURVIVAL_MENU_TAG = "bridge:survival_menu";
+const SURVIVAL_ADMIN_TAG = "bridge:survival_admin";
+const MONEY_OBJECTIVE = "server_money";
+const SHOP_BLOCK_OBJECTIVE = "playershop_blocks";
+const META_KEY = "playershop:v1:meta";
+const DATA_KEY = "playershop:v1:data:";
+const CHUNK_SIZE = 28000;
+const START_BALANCE = 20000;
+const DEFAULT_SHOP_LIMIT = 10;
+const MAX_SHOPS = 5000;
+const MAX_TRADES = 100;
+const CREATE_SCAN_DELAY = 3;
+
+let loaded = false;
+let lastChunkCount = 0;
+let state = { version: 1, nextId: 1, shops: [], settings: { taxPercent: 0, defaultShopLimit: DEFAULT_SHOP_LIMIT }, trades: [] };
+const pendingSignCreates = new Map();
+const opening = new Set();
+
+function log(context, error) { console.warn(`[玩家商店] ${context}: ${error?.stack ?? error}`); }
+function tell(player, message) { try { player.sendMessage(`§b[玩家商店]§r ${message}`); } catch {} }
+function playerKey(name) { return String(name ?? "").trim().toLowerCase(); }
+function sameName(a,b) { return playerKey(a) === playerKey(b); }
+function isAdmin(player) { try { return player.playerPermissionLevel === PlayerPermissionLevel.Operator; } catch { return false; } }
+function dimCode(id) { return id === "minecraft:nether" ? "n" : id === "minecraft:the_end" ? "e" : "o"; }
+function codeDim(code) { return code === "n" ? "minecraft:nether" : code === "e" ? "minecraft:the_end" : "minecraft:overworld"; }
+function locKey(dimensionId, loc) { return `${dimCode(dimensionId)}:${Math.floor(loc.x)}:${Math.floor(loc.y)}:${Math.floor(loc.z)}`; }
+function copyLoc(loc) { return { x: Math.floor(loc.x), y: Math.floor(loc.y), z: Math.floor(loc.z) }; }
+function cleanText(value, max=40, fallback="") { const t=String(value??"").trim().replace(/[\r\n§]/g," ").replace(/\s+/g," "); return (t||fallback).slice(0,max); }
+function formatMoney(v) { return `${Math.max(0,Math.floor(Number(v)||0)).toLocaleString()} 金币`; }
+function ok(message) { return { status: CustomCommandStatus.Success, message }; }
+function fail(message) { return { status: CustomCommandStatus.Failure, message }; }
+
+function getBridgeObjective() { try { return world.scoreboard.getObjective(BRIDGE_OBJECTIVE) ?? world.scoreboard.addObjective(BRIDGE_OBJECTIVE,"插件菜单协同"); } catch { return undefined; } }
+function bridgeAlive(name) { const o=getBridgeObjective(); if(!o)return false; try{return (o.getScore(name)??0)>0;}catch{return false;} }
+function pulseBridge() {
+  const o=getBridgeObjective(); if(!o)return;
+  try {
+    o.setScore(BRIDGE_SELF,BRIDGE_TTL);
+    for(const peer of BRIDGE_PEERS){ const n=o.getScore(peer)??0; if(n>0)o.setScore(peer,Math.max(0,n-1)); }
+  } catch {}
+}
+function getMoneyObjective() { try { return world.scoreboard.getObjective(MONEY_OBJECTIVE) ?? world.scoreboard.addObjective(MONEY_OBJECTIVE,"服务器金币"); } catch { return undefined; } }
+function moneyKey(name){return `u:${playerKey(name)}`;}
