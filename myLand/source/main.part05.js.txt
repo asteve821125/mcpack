@@ -1,0 +1,163 @@
+  });
+
+  register(r, { name:"myland:here", description:"查看脚下当前地皮", permissionLevel:any, cheatsRequired:false }, (origin) => {
+    const p=getOriginPlayer(origin); if(!p)return fail("只能由玩家执行");
+    system.run(()=>{const l=getLandAt(p.location,p.dimension.id);tell(p,l?formatLand(l,true):"你当前位置不在任何地皮内。");}); return ok();
+  });
+
+  register(r, { name:"myland:tool", description:"获取圈地用木锄", permissionLevel:any, cheatsRequired:false }, (origin) => {
+    const p=getOriginPlayer(origin); if(!p)return fail("只能由玩家执行");
+    system.run(async()=>{try{await p.runCommand("give @s wooden_hoe 1");tell(p,"已获得圈地木锄。右键两个方块选择地皮范围。");}catch(e){logError("发放圈地工具失败",e);}}); return ok();
+  });
+
+  register(r, { name:"myland:stats", description:"查看地皮系统统计", permissionLevel:any, cheatsRequired:false }, (origin) => {
+    const p=getOriginPlayer(origin); if(!p)return fail("只能由玩家执行"); system.run(()=>tell(p,serverStatsText())); return ok();
+  });
+
+  register(r, { name:"myland:cancel", description:"取消当前选点", permissionLevel:any, cheatsRequired:false }, (origin)=>{
+    const p=getOriginPlayer(origin); if(!p)return fail("只能由玩家执行"); system.run(()=>tell(p,selections.delete(playerKey(p.name))?"已取消选点。":"当前没有选点。")); return ok();
+  });
+
+  register(r, { name:"myland:delete", description:"删除自己的地皮", permissionLevel:any, cheatsRequired:false, optionalParameters:intOpt }, (origin,id)=>{
+    const p=getOriginPlayer(origin); if(!p)return fail("只能由玩家执行"); system.run(()=>{const l=resolveOwnLand(p,Number.isInteger(id)?id:undefined);if(!l)return tell(p,"找不到要删除的地皮。");state.lands=state.lands.filter(x=>x.id!==l.id);refreshNextId();saveData();tell(p,`已删除 §e#${l.id} ${l.name}§r。`);});return ok();
+  });
+
+  register(r, { name:"myland:name", description:"给地皮命名", permissionLevel:any, cheatsRequired:false, mandatoryParameters:[{name:"landId",type:CustomCommandParamType.Integer},{name:"name",type:CustomCommandParamType.String}] }, (origin,id,name)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,id);if(!l)return tell(p,"找不到你的这块地皮。");l.name=cleanName(name);saveData();tell(p,`地皮 #${l.id} 已命名为 §e${l.name}§r。`);});return ok();
+  });
+
+  register(r, { name:"myland:tp", description:"传送到自己的地皮", permissionLevel:any, cheatsRequired:false, optionalParameters:intOpt }, (origin,id)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,Number.isInteger(id)?id:undefined);if(!l)return tell(p,"找不到目标地皮。");safeTeleport(p,l);});return ok();
+  });
+
+  register(r, { name:"myland:sethome", description:"设置地皮传送点", permissionLevel:any, cheatsRequired:false, optionalParameters:intOpt }, (origin,id)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,Number.isInteger(id)?id:undefined);if(!l)return tell(p,"找不到目标地皮。");if(!pointInLand(p.location,p.dimension.id,l))return tell(p,"请站在该地皮内设置传送点。");l.home={x:p.location.x,y:p.location.y,z:p.location.z};saveData();tell(p,`已设置 #${l.id} 的传送点。`);});return ok();
+  });
+
+  register(r, { name:"myland:trust", description:"信任玩家", permissionLevel:any, cheatsRequired:false, mandatoryParameters:[{name:"landId",type:CustomCommandParamType.Integer},{name:"playerName",type:CustomCommandParamType.String}] }, (origin,id,target)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,id);if(!l)return tell(p,"找不到你的这块地皮。");const n=String(target).trim();if(!n||nameEquals(n,p.name))return tell(p,"玩家名无效。");l.blacklist=l.blacklist.filter(x=>!nameEquals(x,n));if(!l.trust.some(x=>nameEquals(x,n)))l.trust.push(n);saveData();tell(p,`已信任 §e${n}§r 于 #${l.id}，并自动从黑名单移除。`);});return ok();
+  });
+
+  register(r, { name:"myland:untrust", description:"取消信任玩家", permissionLevel:any, cheatsRequired:false, mandatoryParameters:[{name:"landId",type:CustomCommandParamType.Integer},{name:"playerName",type:CustomCommandParamType.String}] }, (origin,id,target)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,id);if(!l)return tell(p,"找不到你的这块地皮。");const before=l.trust.length;l.trust=l.trust.filter(x=>!nameEquals(x,target));saveData();tell(p,before===l.trust.length?"该玩家不在信任列表。":`已取消信任 §e${target}§r。`);});return ok();
+  });
+
+  register(r, { name:"myland:trustlist", description:"查看信任列表", permissionLevel:any, cheatsRequired:false, optionalParameters:intOpt }, (origin,id)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,Number.isInteger(id)?id:undefined);if(!l)return tell(p,"找不到目标地皮。");tell(p,`#${l.id} 信任列表：${l.trust.length?l.trust.join(", "):"无"}`);});return ok();
+  });
+
+  register(r, { name:"myland:flags", description:"查看地皮权限状态和说明", permissionLevel:any, cheatsRequired:false, optionalParameters:intOpt }, (origin,id)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,Number.isInteger(id)?id:undefined) ?? getLandAt(p.location,p.dimension.id);if(!l)return tell(p,"找不到目标地皮。");if(!isOwner(p,l)&&!isTrusted(p,l)&&!isBypass(p))return tell(p,"你没有权限查看该地皮的详细权限。");sendLandFlags(p,l);});return ok();
+  });
+
+  register(r, { name:"myland:visit", description:"访问允许公开传送的地皮", permissionLevel:any, cheatsRequired:false, mandatoryParameters:[{name:"landId",type:CustomCommandParamType.Integer}] }, (origin,id)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=getLandById(id);if(!l)return tell(p,"找不到目标地皮。");if(!(l.flags.visit||isOwner(p,l)||isTrusted(p,l)||isBypass(p)))return tell(p,"该地皮未开放访客传送。地主可使用 /myland:flag <ID> visit true 开放。");safeTeleport(p,l);});return ok();
+  });
+
+  register(r, { name:"myland:transfer", description:"转让自己的地皮给其他玩家", permissionLevel:any, cheatsRequired:false, mandatoryParameters:[{name:"landId",type:CustomCommandParamType.Integer},{name:"playerName",type:CustomCommandParamType.String}] }, (origin,id,target)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,id);if(!l)return tell(p,"找不到你的这块地皮。");const n=String(target??"").trim();if(!n||nameEquals(n,p.name))return tell(p,"目标玩家名无效。");l.owner=n;l.trust=l.trust.filter(x=>!nameEquals(x,n));l.blacklist=l.blacklist.filter(x=>!nameEquals(x,n));if(!l.trust.some(x=>nameEquals(x,p.name)))l.trust.push(p.name);l.forSale=false;l.salePrice=0;l.publicListed=false;saveData();tell(p,`已将 #${l.id} ${l.name} 转让给 §e${n}§r；你已自动加入该地皮信任列表。`);const online=findOnlinePlayer(n);if(online)tell(online,`§e${p.name}§r 已将 #${l.id} ${l.name} 转让给你。`);});return ok();
+  });
+
+  register(r, { name:"myland:flag", description:"设置地皮公共权限（输入到权限参数时会自动列出可选项）", permissionLevel:any, cheatsRequired:false, mandatoryParameters:[{name:"landId",type:CustomCommandParamType.Integer},{name:"myland:flag_name",type:CustomCommandParamType.Enum},{name:"enabled",type:CustomCommandParamType.Boolean}] }, (origin,id,flag,enabled)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,id);if(!l)return tell(p,"找不到你的这块地皮。");const f=String(flag).toLowerCase();if(!FLAG_NAMES.includes(f))return tell(p,`未知 flag。可用：${FLAG_NAMES.join(", ")}`);l.flags[f]=!!enabled;saveData();tell(p,`#${l.id} §e${f}§r = ${enabled?"§a开启§r":"§c关闭§r"}`);});return ok();
+  });
+
+  register(r, { name:"myland:flagpreset", description:"应用地皮权限预设", permissionLevel:any, cheatsRequired:false, mandatoryParameters:[{name:"landId",type:CustomCommandParamType.Integer},{name:"myland:flag_preset",type:CustomCommandParamType.Enum}] }, (origin,id,preset)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,id);if(!l)return tell(p,"找不到你的这块地皮。");const key=String(preset);const data=FLAG_PRESETS[key];if(!data)return tell(p,"未知权限预设。");l.flags={...data};saveData();tell(p,`#${l.id} 已应用权限预设 §e${key}§r。使用 /myland:flags ${l.id} 查看详情。`);});return ok();
+  });
+
+  register(r, { name:"myland:flagreset", description:"重置地皮权限为完全私有", permissionLevel:any, cheatsRequired:false, optionalParameters:intOpt }, (origin,id)=>{
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=resolveOwnLand(p,Number.isInteger(id)?id:undefined);if(!l)return tell(p,"找不到目标地皮。");l.flags={...DEFAULT_FLAGS};saveData();tell(p,`#${l.id} 权限已恢复默认私有模式。`);});return ok();
+  });
+
+  register(r, { name:"myland:admin", description:"管理员地皮工具：tp/info/delete 后输入整数地皮 ID", permissionLevel:admin, cheatsRequired:false, mandatoryParameters:[{name:"myland:admin_action",type:CustomCommandParamType.Enum}], optionalParameters:[{name:"landId",type:CustomCommandParamType.Integer}] }, (origin,action,landId)=>{
+    const p=getOriginPlayer(origin); const a=String(action).toLowerCase();
+    system.run(()=>{
+      if(a==="menu"){if(p)void showAdminMenu(p);return;}
+      if(a==="list"){const text=state.lands.slice(0,50).map(l=>`#${l.id} ${l.name} - ${l.owner}`).join("\n"); if(p)tell(p,text||"暂无地皮"); else console.warn(text||"暂无地皮");return;}
+      if(a==="stats"){const text=serverStatsText();if(p)tell(p,text);else console.warn(text);return;}
+      if(a==="bypass"){if(!p)return;const k=playerKey(p.name);if(adminBypass.has(k)){adminBypass.delete(k);tell(p,"管理员绕过已关闭。");}else{adminBypass.add(k);tell(p,"管理员绕过已开启：可跨过地皮权限、创建费用和单块尺寸限制。");}return;}
+      if(!Number.isInteger(landId)){if(p)tell(p,`§c${a} 需要输入整数地皮 ID。§r 例如：§e/myland:admin ${a} 1§r`);return;}
+      const l=getLandById(landId);if(!l){if(p)tell(p,`找不到 ID 为 #${landId} 的地皮。可先用 /myland:admin list 查看 ID。`);return;}
+      if(a==="info"){if(p)tell(p,formatLand(l,true));return;}
+      if(a==="tp"){if(p)safeTeleport(p,l,{admin:true});return;}
+      if(a==="delete"){state.lands=state.lands.filter(x=>x.id!==l.id);refreshNextId();saveData();if(p)tell(p,`管理员已删除 #${l.id} ${l.name}。`);return;}
+      if(p)tell(p,"用法：/myland:admin menu | list | info <ID> | delete <ID> | tp <ID> | stats | bypass");
+    });return ok();
+  });
+
+
+
+
+});
+
+function copyPlayerLocation(player){return {x:player.location.x,y:player.location.y,z:player.location.z,dimension:player.dimension.id};}
+function ejectBlacklisted(player, land){
+  try{
+    const key=playerKey(player.name), prev=lastSafeLocation.get(key);
+    if(prev && prev.dimension===player.dimension.id){player.teleport({x:prev.x,y:prev.y,z:prev.z},{dimension:player.dimension,checkForBlocks:true});tell(player,`§c你已被 #${land.id} ${land.name} 加入黑名单，无法进入。§r`);return;}
+    const dim=player.dimension,candidates=[{x:land.x1-3,z:Math.floor((land.z1+land.z2)/2)},{x:land.x2+3,z:Math.floor((land.z1+land.z2)/2)},{x:Math.floor((land.x1+land.x2)/2),z:land.z1-3},{x:Math.floor((land.x1+land.x2)/2),z:land.z2+3}];
+    for(const c of candidates){try{const top=dim.getTopmostBlock(c);if(!top)continue;const loc=findSafeNear(dim,{x:c.x,y:top.location.y+1,z:c.z},undefined,2);if(loc){player.teleport(loc,{dimension:dim,checkForBlocks:true});tell(player,`§c你已被 #${land.id} ${land.name} 加入黑名单，无法进入。§r`);return;}}catch{}}
+    tell(player,"你在该地皮黑名单中，请立即离开此区域。");
+  }catch(e){logError("黑名单驱离失败",e);}
+}
+
+system.run(() => pulseBridge());
+system.runInterval(() => pulseBridge(), 20);
+
+// Cross-plugin GUI request bridge. Survival Helper only sets a temporary player tag;
+// myLand opens its own UI directly, avoiding unreliable cross-pack custom-command calls.
+system.runInterval(() => {
+  for (const player of world.getAllPlayers()) {
+    try {
+      if (player.hasTag(BRIDGE_TAG_ADMIN)) {
+        player.removeTag(BRIDGE_TAG_ADMIN);
+        if (isAdmin(player)) system.run(() => { void showAdminMenu(player); });
+        continue;
+      }
+      if (player.hasTag(BRIDGE_TAG_MENU)) {
+        player.removeTag(BRIDGE_TAG_MENU);
+        system.run(() => { void showMainMenu(player); });
+      }
+    } catch (e) { logError("跨插件菜单请求", e); }
+  }
+}, 2);
+
+system.runInterval(() => {
+  if (!loaded) return;
+  for (const player of world.getAllPlayers()) {
+    const pkey=playerKey(player.name);
+    const land = getLandAt(player.location, player.dimension.id);
+    if(land && isBlacklisted(player,land)){
+      ejectBlacklisted(player,land);
+      lastShownLand.set(pkey,"");
+      continue;
+    }
+    lastSafeLocation.set(pkey,copyPlayerLocation(player));
+    const key = land ? String(land.id) : "";
+    const previous = lastShownLand.get(pkey) ?? "";
+    if (key !== previous) {
+      const oldLand=previous?getLandById(Number(previous)):undefined;
+      lastShownLand.set(pkey, key);
+      try {
+        if(oldLand?.farewell) tell(player,`§7离开 ${oldLand.name}：§r${oldLand.farewell}`);
+        if (land) {
+          player.onScreenDisplay.setActionBar(`§e${land.name}§r §7(#${land.id}) | ${land.owner}§r`);
+          if(land.welcome) tell(player,`§a${land.name}：§r${land.welcome}`);
+        } else if (previous) player.onScreenDisplay.setActionBar("§7已离开地皮§r");
+      } catch (e) { logError("进出地皮提示", e); }
+    }
+  }
+}, 10);
+
+system.runInterval(() => {
+  if(!loaded||borderSessions.size===0)return;
+  for(const player of world.getAllPlayers()){
+    const key=playerKey(player.name),session=borderSessions.get(key);if(!session)continue;
+    if(system.currentTick>=session.untilTick){borderSessions.delete(key);continue;}
+    const land=getLandById(session.landId);if(!land||player.dimension.id!==land.dimension){borderSessions.delete(key);continue;}
+    const points=borderPoints(land),y=Math.floor(player.location.y)+0.2;
+    try{for(const pt of points)player.spawnParticle("minecraft:basic_flame_particle",{x:pt.x,y,z:pt.z});}
+    catch(e){borderSessions.delete(key);logError("边界粒子显示失败",e);tell(player,"边界粒子在当前环境不可用，已自动停止显示。");}
+  }
+}, BORDER_REFRESH_TICKS);
