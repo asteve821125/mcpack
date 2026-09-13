@@ -1,0 +1,414 @@
+    const suggested = `传送点 ${homes.length + 1}`;
+    const response = await new ModalFormData()
+      .title("新建个人传送点")
+      .textField("名称（最多24个字符）", "例如：主基地 / 矿场 / 村庄", { defaultValue: suggested })
+      .show(player);
+    if (response.canceled) return system.run(() => showHomesMenu(player));
+    const name = normalizeHomeName(response.formValues?.[0], suggested);
+    const nowHomes = getPersonalHomes(player);
+    const nowLimit = getPersonalHomeLimit(player);
+    if (nowHomes.length >= nowLimit) return player.sendMessage(`§e[生存辅助] 传送点数量已达上限（${nowLimit}）。`), system.run(() => showHomesMenu(player));
+    nowHomes.push(makeNamedHome(player, name));
+    if (savePersonalHomes(player, nowHomes)) {
+      player.sendMessage(`§a[生存辅助] §f已保存传送点“§e${name}§f”。`);
+    }
+    system.run(() => showHomesMenu(player));
+  } catch (error) {
+    console.warn(`[生存辅助] 新建传送点失败: ${error}`);
+  }
+}
+
+async function showHomeDetailMenu(player, index) {
+  try {
+    const homes = getPersonalHomes(player);
+    const home = homes[index];
+    if (!home) return system.run(() => showHomesMenu(player));
+    const response = await new ActionFormData()
+      .title(`§b${home.name}`)
+      .body(`§f${formatLocation(home)}\n\n请选择操作：`)
+      .button("§a传送到这里")
+      .button("§e用当前位置覆盖")
+      .button("§b重命名")
+      .button("§c删除")
+      .button("返回")
+      .show(player);
+    if (response.canceled) return;
+    if (response.selection === 0) {
+      teleportToRecord(player, home, `传送点“${home.name}”`);
+    } else if (response.selection === 1) {
+      const fresh = getPersonalHomes(player);
+      if (!fresh[index]) return system.run(() => showHomesMenu(player));
+      fresh[index] = { name: fresh[index].name, ...makeLocationRecord(player) };
+      savePersonalHomes(player, fresh);
+      player.sendMessage(`§a[生存辅助] §f已用当前位置覆盖“§e${fresh[index].name}§f”。`);
+      system.run(() => showHomeDetailMenu(player, index));
+    } else if (response.selection === 2) {
+      system.run(() => showRenameHomeDialog(player, index));
+    } else if (response.selection === 3) {
+      system.run(() => showDeleteHomeConfirm(player, index));
+    } else {
+      system.run(() => showHomesMenu(player));
+    }
+  } catch (error) {
+    console.warn(`[生存辅助] 传送点详情菜单失败: ${error}`);
+  }
+}
+
+async function showRenameHomeDialog(player, index) {
+  try {
+    const homes = getPersonalHomes(player);
+    const home = homes[index];
+    if (!home) return system.run(() => showHomesMenu(player));
+    const response = await new ModalFormData()
+      .title("重命名传送点")
+      .textField("新名称", "最多24个字符", { defaultValue: home.name })
+      .show(player);
+    if (response.canceled) return system.run(() => showHomeDetailMenu(player, index));
+    const fresh = getPersonalHomes(player);
+    if (!fresh[index]) return system.run(() => showHomesMenu(player));
+    fresh[index].name = normalizeHomeName(response.formValues?.[0], fresh[index].name);
+    savePersonalHomes(player, fresh);
+    player.sendMessage(`§a[生存辅助] §f传送点已重命名为“§e${fresh[index].name}§f”。`);
+    system.run(() => showHomeDetailMenu(player, index));
+  } catch (error) {
+    console.warn(`[生存辅助] 重命名传送点失败: ${error}`);
+  }
+}
+
+async function showDeleteHomeConfirm(player, index) {
+  try {
+    const homes = getPersonalHomes(player);
+    const home = homes[index];
+    if (!home) return system.run(() => showHomesMenu(player));
+    const response = await new MessageFormData()
+      .title("删除传送点")
+      .body(`确定删除“${home.name}”吗？\n此操作无法撤销。`)
+      .button1("§c删除")
+      .button2("取消")
+      .show(player);
+    if (response.canceled || response.selection !== 0) return system.run(() => showHomeDetailMenu(player, index));
+    const fresh = getPersonalHomes(player);
+    const removed = fresh.splice(index, 1)[0];
+    savePersonalHomes(player, fresh);
+    player.sendMessage(`§a[生存辅助] §f已删除传送点“§e${removed?.name ?? home.name}§f”。`);
+    system.run(() => showHomesMenu(player));
+  } catch (error) {
+    console.warn(`[生存辅助] 删除传送点失败: ${error}`);
+  }
+}
+
+async function showSocialMenu(player) {
+  cleanupTpaRequests();
+  const tpaGlobal = boolProperty(world, PROP_GLOBAL_TPA, true) && allowedFor(player, ALLOW_KEYS.tpa);
+  const coordsGlobal = boolProperty(world, PROP_GLOBAL_COORDS, true) && allowedFor(player, ALLOW_KEYS.coords);
+  const incoming = getIncomingRequests(player.id).length;
+
+  try {
+    const response = await new ActionFormData()
+      .title("§d玩家互助")
+      .body(`收到的 TPA 请求：§e${incoming}§f\nTPA 请求 60 秒后自动失效。`)
+      .button(`向玩家发送 TPA${tpaGlobal ? "" : "  §c[全服关闭]"}`)
+      .button(`处理 TPA 请求  §e(${incoming})`)
+      .button(`分享我的坐标${coordsGlobal ? "" : "  §c[全服关闭]"}`)
+      .button("返回主菜单")
+      .show(player);
+
+    if (response.canceled) return;
+
+    if (response.selection === 0) {
+      if (!tpaGlobal) return player.sendMessage("§c[生存辅助] 管理员已关闭 TPA。"), system.run(() => showSocialMenu(player));
+      system.run(() => showTpaTargets(player));
+    } else if (response.selection === 1) {
+      if (!tpaGlobal) return player.sendMessage("§c[生存辅助] 管理员已关闭 TPA。"), system.run(() => showSocialMenu(player));
+      system.run(() => showIncomingTpa(player));
+    } else if (response.selection === 2) {
+      if (!coordsGlobal) return player.sendMessage("§c[生存辅助] 管理员已关闭坐标分享。"), system.run(() => showSocialMenu(player));
+      const data = makeLocationRecord(player);
+      world.sendMessage(`§d[坐标分享] §f${player.name}：${formatLocation(data)}`);
+      system.run(() => showSocialMenu(player));
+    } else if (response.selection === 3) {
+      system.run(() => showMainMenu(player));
+    }
+  } catch (error) {
+    console.warn(`[生存辅助] 玩家互助菜单失败: ${error}`);
+  }
+}
+
+async function showTpaTargets(player) {
+  const targets = world.getAllPlayers().filter((p) => p.id !== player.id);
+  if (targets.length === 0) {
+    player.sendMessage("§e[生存辅助] 当前没有其他在线玩家。")
+    system.run(() => showSocialMenu(player));
+    return;
+  }
+
+  try {
+    const form = new ActionFormData().title("发送 TPA").body("选择你想传送到的玩家：");
+    for (const target of targets) form.button(target.name);
+    form.button("返回");
+
+    const response = await form.show(player);
+    if (response.canceled) return;
+    if (response.selection === targets.length) return system.run(() => showSocialMenu(player));
+
+    const target = targets[response.selection];
+    if (!target?.isValid) {
+      player.sendMessage("§c[生存辅助] 该玩家已离线。")
+      return;
+    }
+
+    addTpaRequest(target.id, player.id);
+    player.sendMessage(`§a[生存辅助] §f已向 ${target.name} 发送 TPA 请求。`);
+    target.sendMessage(`§d[生存辅助] §f${player.name} 想传送到你身边。请使用指南针 → 玩家互助 → 处理 TPA 请求。`);
+  } catch (error) {
+    console.warn(`[生存辅助] TPA 目标菜单失败: ${error}`);
+  }
+}
+
+async function showIncomingTpa(player) {
+  cleanupTpaRequests();
+  const requests = getIncomingRequests(player.id)
+    .map((request) => ({ ...request, player: findPlayerById(request.requesterId) }))
+    .filter((request) => request.player);
+
+  if (requests.length === 0) {
+    player.sendMessage("§e[生存辅助] 当前没有有效的 TPA 请求。")
+    system.run(() => showSocialMenu(player));
+    return;
+  }
+
+  try {
+    const form = new ActionFormData().title("TPA 请求").body("选择一个请求进行处理：");
+    for (const request of requests) form.button(request.player.name);
+    form.button("返回");
+
+    const response = await form.show(player);
+    if (response.canceled) return;
+    if (response.selection === requests.length) return system.run(() => showSocialMenu(player));
+
+    const request = requests[response.selection];
+    system.run(() => confirmTpaRequest(player, request.player));
+  } catch (error) {
+    console.warn(`[生存辅助] TPA 请求菜单失败: ${error}`);
+  }
+}
+
+async function confirmTpaRequest(target, requester) {
+  if (!target?.isValid || !requester?.isValid) return;
+
+  try {
+    const response = await new MessageFormData()
+      .title("处理 TPA 请求")
+      .body(`${requester.name} 想传送到你身边。`)
+      .button1("拒绝")
+      .button2("接受")
+      .show(target);
+
+    removeTpaRequest(target.id, requester.id);
+    if (response.canceled) return;
+
+    if (response.selection === 1) {
+      if (!boolProperty(world, PROP_GLOBAL_TPA, true)) {
+        target.sendMessage("§c[生存辅助] TPA 已被管理员关闭。")
+        requester.sendMessage("§c[生存辅助] TPA 已被管理员关闭。")
+        return;
+      }
+      try {
+        requester.teleport(target.location, { dimension: target.dimension, checkForBlocks: false });
+        requester.sendMessage(`§a[生存辅助] §f${target.name} 接受了你的 TPA 请求。`);
+        target.sendMessage(`§a[生存辅助] §f已接受 ${requester.name} 的 TPA 请求。`);
+      } catch (error) {
+        target.sendMessage("§c[生存辅助] TPA 传送失败。")
+        requester.sendMessage("§c[生存辅助] TPA 传送失败。")
+        console.warn(`[生存辅助] TPA 传送失败: ${error}`);
+      }
+    } else {
+      requester.sendMessage(`§c[生存辅助] ${target.name} 拒绝了你的 TPA 请求。`);
+      target.sendMessage(`§e[生存辅助] 已拒绝 ${requester.name} 的 TPA 请求。`);
+    }
+  } catch (error) {
+    console.warn(`[生存辅助] TPA 确认菜单失败: ${error}`);
+  }
+}
+
+function addTpaRequest(targetId, requesterId) {
+  cleanupTpaRequests();
+  let requests = tpaRequests.get(targetId);
+  if (!requests) {
+    requests = new Map();
+    tpaRequests.set(targetId, requests);
+  }
+  requests.set(requesterId, system.currentTick + TPA_EXPIRE_TICKS);
+}
+
+function removeTpaRequest(targetId, requesterId) {
+  const requests = tpaRequests.get(targetId);
+  if (!requests) return;
+  requests.delete(requesterId);
+  if (requests.size === 0) tpaRequests.delete(targetId);
+}
+
+function getIncomingRequests(targetId) {
+  cleanupTpaRequests();
+  const requests = tpaRequests.get(targetId);
+  if (!requests) return [];
+  return [...requests.entries()].map(([requesterId, expiresAt]) => ({ requesterId, expiresAt }));
+}
+
+function cleanupTpaRequests() {
+  const now = system.currentTick;
+  for (const [targetId, requests] of tpaRequests) {
+    for (const [requesterId, expiresAt] of requests) {
+      if (expiresAt < now || !findPlayerById(requesterId)) requests.delete(requesterId);
+    }
+    if (requests.size === 0 || !findPlayerById(targetId)) tpaRequests.delete(targetId);
+  }
+}
+
+function findPlayerById(id) {
+  return world.getAllPlayers().find((player) => player.id === id);
+}
+
+async function confirmReset(player) {
+  try {
+    const response = await new MessageFormData()
+      .title("恢复默认设置")
+      .body("确定将 TNT 投掷、坠落保护、连锁挖矿、连锁砍树和潜行电梯恢复为开启吗？个人传送点、死亡记录不会被删除。")
+      .button1("取消")
+      .button2("确定恢复")
+      .show(player);
+
+    if (response.canceled || response.selection !== 1) {
+      system.run(() => showMainMenu(player));
+      return;
+    }
+
+    setBoolProperty(player, PROP_TNT, true);
+    setBoolProperty(player, PROP_SURFACE, true);
+    setBoolProperty(player, PROP_VEIN, true);
+    setBoolProperty(player, PROP_TREE, true);
+    setBoolProperty(player, PROP_ELEVATOR, true);
+    player.sendMessage("§a[生存辅助] §f个人开关已恢复默认。")
+    system.run(() => showMainMenu(player));
+  } catch (error) {
+    console.warn(`[生存辅助] 重置设置 GUI 失败: ${error}`);
+  }
+}
+
+async function showHelp(player) {
+  try {
+    const response = await new ActionFormData()
+      .title("生存辅助 · 功能说明")
+      .body(
+        "§e打开菜单\n§f手持指南针并使用，会先打开服务器辅助总菜单。\n\n" +
+        "§eTNT 投掷\n§f仅可在下界使用。每次进入下界后第一次潜行使用 TNT 只提醒一次，之后本次下界停留期间可直接投掷；离开并再次进入下界后会重新提醒。生存模式每次投掷消耗 1 个 TNT。\n\n" +
+        "§e坠落保护\n§f开启后，潜行发生危险坠落时会自动返回最近的安全落脚点；短距离正常下落不会触发。\n\n" +
+        "§e个人传送点\n§f默认可保存 6 个个人传送点，管理员可为每名玩家单独调整上限，可命名、传送、重命名、覆盖当前位置或删除；旧版单一家园会自动迁移为“默认家园”。\n\n" +
+        "§e死亡记录\n§f死亡后自动记录维度与坐标，可从 GUI 返回上次死亡点。\n\n" +
+        "§eTPA\n§f向在线玩家发送传送请求；对方接受后你会传送到对方身边。请求 60 秒失效。\n\n" +
+        "§e坐标分享\n§f一键向全服发送自己当前维度与坐标。\n\n" +
+        "§e连锁挖矿 / 连锁砍树\n§f开启后，潜行破坏同类矿石或原木会自动连锁处理；矿石最多 32 个，原木最多 64 个。\n\n" +
+        "§e潜行电梯\n§f潜行并按跳跃键，向上寻找 32 格内最近的安全平台。\n\n" +
+        "§e管理员\n§f游戏权限为“操作员”的玩家会自动看到全服设置，不需要标签。"
+      )
+      .button("返回")
+      .show(player);
+
+    if (!response.canceled) system.run(() => showMainMenu(player));
+  } catch (error) {
+    console.warn(`[生存辅助] 帮助 GUI 失败: ${error}`);
+  }
+}
+
+async function showAdminMenu(player) {
+  if (!isAdmin(player)) return;
+
+  try {
+    const values = [
+      boolProperty(world, PROP_GLOBAL_TNT, true),
+      boolProperty(world, PROP_GLOBAL_SURFACE, true),
+      boolProperty(world, PROP_GLOBAL_HOME, true),
+      boolProperty(world, PROP_GLOBAL_DEATH, true),
+      boolProperty(world, PROP_GLOBAL_TPA, true),
+      boolProperty(world, PROP_GLOBAL_COORDS, true),
+      boolProperty(world, PROP_GLOBAL_VEIN, true),
+      boolProperty(world, PROP_GLOBAL_TREE, true),
+      boolProperty(world, PROP_GLOBAL_ELEVATOR, true)
+    ];
+    const keys = [
+      PROP_GLOBAL_TNT,
+      PROP_GLOBAL_SURFACE,
+      PROP_GLOBAL_HOME,
+      PROP_GLOBAL_DEATH,
+      PROP_GLOBAL_TPA,
+      PROP_GLOBAL_COORDS,
+      PROP_GLOBAL_VEIN,
+      PROP_GLOBAL_TREE,
+      PROP_GLOBAL_ELEVATOR
+    ];
+    const labels = ["TNT 投掷", "坠落保护", "家园", "返回死亡点", "TPA", "坐标分享", "连锁挖矿", "连锁砍树", "潜行电梯"];
+
+    const form = new ActionFormData()
+      .title("§6生存辅助 · 全服设置")
+      .body("只有游戏权限等级为“操作员”的玩家能进入。全服关闭会覆盖玩家个人设置。")
+
+    for (let i = 0; i < labels.length; i++) {
+      form.button(`${labels[i]}  ${statusText(values[i])}`);
+    }
+    form.button("§e在线玩家权限与设置");
+    form.button("返回主菜单");
+
+    const response = await form.show(player);
+    if (response.canceled) return;
+
+    if (response.selection >= 0 && response.selection < labels.length) {
+      const index = response.selection;
+      const newValue = !values[index];
+      setBoolProperty(world, keys[index], newValue);
+      world.sendMessage(`§6[生存辅助] §f管理员已将全服 ${labels[index]} ${newValue ? "开启" : "关闭"}。`);
+      system.run(() => showAdminMenu(player));
+    } else if (response.selection === labels.length) {
+      system.run(() => showAdminPlayerList(player));
+    } else if (response.selection === labels.length + 1) {
+      system.run(() => showMainMenu(player));
+    }
+  } catch (error) {
+    console.warn(`[生存辅助] 管理员 GUI 失败: ${error}`);
+  }
+}
+
+async function showAdminPlayerList(admin) {
+  if (!isAdmin(admin)) return;
+  const players = world.getAllPlayers();
+  try {
+    const form = new ActionFormData().title("§6在线玩家管理").body("选择玩家查看并修改其生存辅助权限与个人开关。");
+    for (const p of players) form.button(p.name + (isAdmin(p) ? "  §6[OP]" : ""));
+    form.button("返回管理员菜单");
+    const response = await form.show(admin);
+    if (response.canceled) return;
+    if (response.selection === players.length) return system.run(() => showAdminMenu(admin));
+    const target = players[response.selection];
+    if (!target?.isValid) return admin.sendMessage("§c[生存辅助] 玩家已离线。");
+    system.run(() => showAdminPlayerSettings(admin, target));
+  } catch (error) {
+    console.warn(`[生存辅助] 在线玩家管理失败: ${error}`);
+  }
+}
+
+async function showAdminPlayerSettings(admin, target) {
+  if (!isAdmin(admin) || !target?.isValid) return;
+  const rows = [
+    ["TNT 投掷", ALLOW_KEYS.tnt, PROP_TNT],
+    ["坠落保护", ALLOW_KEYS.surface, PROP_SURFACE],
+    ["家园", ALLOW_KEYS.home, null],
+    ["返回死亡点", ALLOW_KEYS.death, null],
+    ["TPA", ALLOW_KEYS.tpa, null],
+    ["坐标分享", ALLOW_KEYS.coords, null],
+    ["连锁挖矿", ALLOW_KEYS.vein, PROP_VEIN],
+    ["连锁砍树", ALLOW_KEYS.tree, PROP_TREE],
+    ["潜行电梯", ALLOW_KEYS.elevator, PROP_ELEVATOR]
+  ];
+  try {
+    const form = new ActionFormData()
+      .title(`§6玩家设置 · ${target.name}`)
+      .body(`点击功能可切换该玩家是否有权使用。个人开关状态会显示在括号内；无个人开关的功能仅显示权限。\n§e个人传送点：§f${getPersonalHomes(target).length}/${getPersonalHomeLimit(target)}\n§7OP 身份仍由游戏权限决定，这里不会改变。`);
