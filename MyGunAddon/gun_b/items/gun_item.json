@@ -1,0 +1,10 @@
+{
+  "format_version": "1.21.0",
+  "minecraft:item": {
+    "description": {"identifier": "dear:gun"},
+    "components": {
+      "minecraft:icon": "gun_item",
+      "minecraft:display_name": {"value": "能量手枪"}
+    }
+  }
+}

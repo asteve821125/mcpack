@@ -1,0 +1,19 @@
+{
+    "format_version": 2,
+    "header": {
+      "name": "Gun Addon",
+      "description": "Custom Gun Item",
+      "uuid": "BD24F5F0-AD81-43E9-83B8-D25B97EB9322",
+      "version": [1, 0, 0],
+      "min_engine_version": [1, 21, 0]
+    },
+    "modules": [
+      {"type":"data","uuid":"7a69bc8e-6a40-4d69-a405-54c63c1362e8","version":[1,0,0]},
+      {"type":"script","uuid":"02168F12-7781-401A-A1FC-9C4B0640CB4B","version":[1,0,0],"language":"javascript","entry":"scripts/gun_script.js"}
+    ],
+    "dependencies": [
+      {"uuid":"90EC690F-8948-4D2C-9F4C-CA487DD8D436","version":[1,0,0]},
+      {"module_name":"@minecraft/server","version":"1.18.0"}
+    ],
+    "capabilities": ["script"]
+  }

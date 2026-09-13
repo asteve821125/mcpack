@@ -1,0 +1,12 @@
+{
+  "format_version": "1.21.0",
+  "minecraft:entity": {
+    "description": {"identifier":"dear:bullet","is_spawnable":false,"is_summonable":true},
+    "components": {
+      "minecraft:physics": {"has_gravity":false,"has_collision":true},
+      "minecraft:projectile": {"power":3.0,"gravity":0.0,"hit_sound":"bow.hit"},
+      "minecraft:collision_box": {"width":0.2,"height":0.2},
+      "minecraft:damage_sensor": {"triggers":{"cause":"all","deals_damage":true,"damage_multiplier":2.0}}
+    }
+  }
+}

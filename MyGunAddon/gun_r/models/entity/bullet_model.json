@@ -1,0 +1,7 @@
+{
+  "format_version": "1.21.0",
+  "minecraft:geometry": [{
+    "description": {"identifier":"geometry.bullet","texture_width":16,"texture_height":16},
+    "bones": [{"name":"root","pivot":[0,0,0],"cubes":[{"origin":[-1,-1,-1],"size":[2,2,2],"uv":[0,0]}]}]
+  }]
+}
