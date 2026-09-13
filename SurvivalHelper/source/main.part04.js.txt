@@ -1,0 +1,246 @@
+    for (const [label, allowKey, personalKey] of rows) {
+      const allow = boolProperty(target, allowKey, true);
+      const personal = personalKey ? boolProperty(target, personalKey, true) : null;
+      form.button(`${label}  ${allow ? "§a允许" : "§c禁止"}${personalKey ? ` §7(个人:${personal ? "开" : "关"})` : ""}`);
+    }
+    form.button(`§b设置个人传送点上限  §e(${getPersonalHomeLimit(target)})`);
+    form.button("返回玩家列表");
+    const response = await form.show(admin);
+    if (response.canceled) return;
+    if (response.selection === rows.length) return system.run(() => showAdminHomeLimitDialog(admin, target));
+    if (response.selection === rows.length + 1) return system.run(() => showAdminPlayerList(admin));
+    const [label, allowKey] = rows[response.selection];
+    const newValue = !boolProperty(target, allowKey, true);
+    setBoolProperty(target, allowKey, newValue);
+    admin.sendMessage(`§6[生存辅助] §f${target.name} 的 ${label} 权限已设为 ${newValue ? "允许" : "禁止"}。`);
+    target.sendMessage(`§e[生存辅助] 管理员已将你的 ${label} 使用权限设为 ${newValue ? "§a允许" : "§c禁止"}。`);
+    system.run(() => showAdminPlayerSettings(admin, target));
+  } catch (error) {
+    console.warn(`[生存辅助] 玩家设置失败: ${error}`);
+  }
+}
+
+async function showAdminHomeLimitDialog(admin, target) {
+  if (!isAdmin(admin) || !target?.isValid) return;
+  const current = getPersonalHomeLimit(target);
+  try {
+    const response = await new ModalFormData()
+      .title(`§6传送点上限 · ${target.name}`)
+      .textField(
+        `设置个人传送点上限（0-${MAX_STORED_PERSONAL_HOMES}）\n默认值为 ${DEFAULT_PERSONAL_HOME_LIMIT}。`,
+        "例如：6 / 10 / 20",
+        { defaultValue: String(current) }
+      )
+      .show(admin);
+    if (response.canceled) return system.run(() => showAdminPlayerSettings(admin, target));
+    const raw = String(response.formValues?.[0] ?? "").trim();
+    const value = Number(raw);
+    if (!Number.isInteger(value) || value < 0 || value > MAX_STORED_PERSONAL_HOMES) {
+      admin.sendMessage(`§c[生存辅助] 请输入 0-${MAX_STORED_PERSONAL_HOMES} 的整数。`);
+      return system.run(() => showAdminHomeLimitDialog(admin, target));
+    }
+    if (setPersonalHomeLimit(target, value)) {
+      admin.sendMessage(`§6[生存辅助] §f已将 ${target.name} 的个人传送点上限设置为 §e${value}§f。`);
+      target.sendMessage(`§e[生存辅助] 管理员已将你的个人传送点上限设置为 §f${value}§e。`);
+    }
+    system.run(() => showAdminPlayerSettings(admin, target));
+  } catch (error) {
+    console.warn(`[生存辅助] 设置个人传送点上限失败: ${error}`);
+  }
+}
+
+// Compass coordination:
+// - Survival Helper alone: open Survival Helper directly.
+// - myLand present: show one shared hub, preventing two plugins from opening forms at once.
+world.afterEvents.itemUse.subscribe((event) => {
+  if (event.itemStack?.typeId !== MENU_ITEM) return;
+  const player = event.source;
+  system.runTimeout(() => showCompassHub(player), 2);
+});
+
+// Track block interaction so crouch-placing TNT still works normally.
+world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+  if (event.itemStack?.typeId !== TNT_ID) return;
+
+  const playerId = event.player.id;
+  recentBlockInteraction.add(playerId);
+  system.runTimeout(() => recentBlockInteraction.delete(playerId), BLOCK_INTERACTION_GUARD_TICKS);
+});
+
+world.beforeEvents.itemUse.subscribe((event) => {
+  const player = event.source;
+  if (event.itemStack?.typeId !== TNT_ID) return;
+  if (!player.isSneaking) return;
+  if (!tntEnabledFor(player)) return;
+  if (recentBlockInteraction.has(player.id)) return;
+
+  throwTnt(player);
+});
+
+function floorDistanceBelow(player, maxDepth = SURFACE_SAFE_SCAN_DEPTH) {
+  const x = Math.floor(player.location.x);
+  const z = Math.floor(player.location.z);
+  const startY = Math.floor(player.location.y) - 1;
+  for (let depth = 0; depth <= maxDepth; depth++) {
+    const y = startY - depth;
+    try {
+      const floor = player.dimension.getBlock({ x, y, z });
+      if (!blockIsFloor(floor)) continue;
+      const feet = player.dimension.getBlock({ x, y: y + 1, z });
+      const head = player.dimension.getBlock({ x, y: y + 2, z });
+      if (blockIsPassable(feet) && blockIsPassable(head)) {
+        return Math.max(0, player.location.y - (y + 1));
+      }
+    } catch {}
+  }
+  return undefined;
+}
+
+function rememberSafeLocation(player) {
+  if (!player.isOnGround || player.isInWater || player.isFalling) return;
+  const standing = player.getBlockStandingOn();
+  if (!standing || standing.isLiquid) return;
+  lastSafeLocation.set(player.id, {
+    dimensionId: player.dimension.id,
+    location: { x: player.location.x, y: player.location.y + 0.05, z: player.location.z }
+  });
+}
+
+function rescueFallingPlayer(player) {
+  const saved = lastSafeLocation.get(player.id);
+  if (!saved || saved.dimensionId !== player.dimension.id) return false;
+  try {
+    player.clearVelocity();
+    player.teleport(saved.location, { dimension: player.dimension, checkForBlocks: false });
+    player.clearVelocity();
+    surfaceFallTicks.delete(player.id);
+    surfaceRescueCooldown.set(player.id, system.currentTick + SURFACE_RESCUE_COOLDOWN_TICKS);
+    player.sendMessage("§b[生存辅助] §f检测到危险坠落，已返回最近的安全落脚点。");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+system.run(() => pulseBridge());
+system.runInterval(() => pulseBridge(), 20);
+
+// Timely fall rescue: remember the most recent safe ground and evaluate falling every tick.
+system.runInterval(() => {
+  const globalEnabled = boolProperty(world, PROP_GLOBAL_SURFACE, true);
+
+  for (const player of world.getAllPlayers()) {
+    try {
+      updateTntDimensionSession(player);
+
+      if (player.isOnGround) {
+        surfaceFallTicks.delete(player.id);
+        if (globalEnabled && boolProperty(player, PROP_SURFACE, true) && allowedFor(player, ALLOW_KEYS.surface)) {
+          rememberSafeLocation(player);
+        }
+        continue;
+      }
+
+      if (!globalEnabled || !boolProperty(player, PROP_SURFACE, true) || !allowedFor(player, ALLOW_KEYS.surface)) {
+        surfaceFallTicks.delete(player.id);
+        continue;
+      }
+      if (!player.isSneaking || !player.isFalling || player.isInWater) {
+        surfaceFallTicks.delete(player.id);
+        continue;
+      }
+
+      const cooldownUntil = surfaceRescueCooldown.get(player.id) ?? 0;
+      if (system.currentTick < cooldownUntil) continue;
+
+      const velocity = player.getVelocity();
+      if (velocity.y >= -0.35) {
+        surfaceFallTicks.delete(player.id);
+        continue;
+      }
+
+      const ticks = (surfaceFallTicks.get(player.id) ?? 0) + 1;
+      surfaceFallTicks.set(player.id, ticks);
+      if (ticks < SURFACE_FALL_TRIGGER_TICKS) continue;
+
+      // Short, ordinary drops are left alone. Rescue only when no nearby safe landing exists.
+      const floorDistance = floorDistanceBelow(player);
+      if (floorDistance !== undefined && floorDistance <= SURFACE_DANGEROUS_DROP) continue;
+
+      rescueFallingPlayer(player);
+    } catch (error) {
+      console.warn(`[生存辅助] 安全传送失败: ${error}`);
+    }
+  }
+}, SURFACE_HELP_INTERVAL_TICKS);
+
+// Vein mining and tree felling. Trigger only while sneaking.
+world.afterEvents.playerBreakBlock.subscribe((event) => {
+  const player = event.player;
+  if (!player?.isValid || !player.isSneaking) return;
+  let typeId;
+  try { typeId = event.brokenBlockPermutation.type.id; } catch { return; }
+  const origin = event.block.location;
+
+  if (ORE_IDS.has(typeId) && veinEnabledFor(player)) {
+    system.run(() => {
+      startChainBreak(player, origin, typeId, "ore", 31);
+    });
+  } else if (LOG_IDS.has(typeId) && treeEnabledFor(player)) {
+    system.run(() => {
+      startChainBreak(player, origin, typeId, "log", 63);
+    });
+  }
+});
+
+// Sneak elevator: crouch + jump, move to the nearest safe platform above.
+world.afterEvents.playerButtonInput.subscribe((event) => {
+  if (event.button !== InputButton.Jump || event.newButtonState !== ButtonState.Pressed) return;
+  const player = event.player;
+  if (!player?.isValid || !player.isSneaking) return;
+  system.run(() => tryElevatorUp(player));
+});
+
+// Record last death location and persist it when the player respawns.
+world.afterEvents.entityDie.subscribe((event) => {
+  const entity = event.deadEntity;
+  if (entity.typeId !== "minecraft:player") return;
+
+  try {
+    pendingDeathById.set(entity.id, {
+      x: entity.location.x,
+      y: entity.location.y,
+      z: entity.location.z,
+      dimension: entity.dimension.id
+    });
+  } catch (error) {
+    console.warn(`[生存辅助] 记录死亡坐标失败: ${error}`);
+  }
+});
+
+world.afterEvents.playerSpawn.subscribe((event) => {
+  if (event.initialSpawn) return;
+  const player = event.player;
+  const data = pendingDeathById.get(player.id);
+  if (!data) return;
+
+  pendingDeathById.delete(player.id);
+  if (setStringProperty(player, PROP_DEATH, JSON.stringify(data))) {
+    system.run(() => {
+      try {
+        player.sendMessage(`§c[生存辅助] §f已记录上次死亡位置：${formatLocation(data)}`);
+        player.sendMessage("§7使用指南针 → 传送与家园，可查看或返回死亡点。")
+      } catch {}
+    });
+  }
+});
+
+world.afterEvents.playerLeave.subscribe((event) => {
+  netherTntAcknowledged.delete(event.playerId);
+  lastKnownDimension.delete(event.playerId);
+  tntDimensionWarnUntil.delete(event.playerId);
+  recentBlockInteraction.delete(event.playerId);
+  openingMenu.delete(event.playerId);
+  tpaRequests.delete(event.playerId);
+  for (const requests of tpaRequests.values()) requests.delete(event.playerId);
+});
