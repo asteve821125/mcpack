@@ -1,0 +1,310 @@
+  if(r.selection===0){const m=new ModalFormData().title("玩家余额管理").textField("玩家名","输入完整玩家名").textField("新余额（留空只查询）","例如 50000");const a=await showFormSafe(player,m,"余额管理");if(!a||a.canceled)return showAdminEconomy(player);const n=cleanText(a.formValues?.[0],40),raw=String(a.formValues?.[1]??"").trim();if(!n)return showAdminEconomy(player);if(raw){const v=Math.floor(Number(raw));if(!Number.isFinite(v)||v<0||v>2000000000){tell(player,"余额必须是 0 ~ 2,000,000,000 的整数。");return showAdminEconomy(player);}setBalanceByName(n,v);saveData();}tell(player,`${n} 当前余额：${formatMoney(getBalanceByName(n,true))}`);return showAdminEconomy(player);}
+  return showAdminMenu(player);
+}
+
+async function showAdminLandList(player, page = 0, lands = undefined, title = "全服地皮") {
+  loadData();
+  const src = (lands ?? [...state.lands]).sort((a,b)=>a.id-b.id);
+  const pageSize = 20;
+  const pages = Math.max(1, Math.ceil(src.length / pageSize));
+  page = Math.max(0, Math.min(page, pages - 1));
+  const start = page * pageSize;
+  const shown = src.slice(start, start + pageSize);
+  const form = new ActionFormData().title(`${title} ${page+1}/${pages}`).body(src.length ? `共 ${src.length} 块，点击查看管理员操作` : "没有匹配的地皮。");
+  for (const l of shown) {
+    const z = landSize(l);
+    form.button(`#${l.id} ${l.name}\n${l.owner} · ${z.width}×${z.length}`);
+  }
+  if (page > 0) form.button("上一页");
+  if (page < pages - 1) form.button("下一页");
+  form.button("返回管理员面板");
+  const r = await showFormSafe(player, form, "管理员地皮列表");
+  if (!r || r.canceled) return;
+  if (r.selection < shown.length) return showAdminLandDetail(player, shown[r.selection], { page, lands: src, title });
+  let idx = shown.length;
+  if (page > 0) { if (r.selection === idx) return showAdminLandList(player, page - 1, src, title); idx++; }
+  if (page < pages - 1) { if (r.selection === idx) return showAdminLandList(player, page + 1, src, title); idx++; }
+  return showAdminMenu(player);
+}
+
+async function showAdminSearch(player) {
+  const form = new ModalFormData().title("管理员搜索地皮").textField("地主名 / 地皮名称 / 地皮ID", "例如 Steve、商店、12");
+  const r = await showFormSafe(player, form, "管理员搜索");
+  if (!r || r.canceled) return showAdminMenu(player);
+  const raw = String(r.formValues?.[0] ?? "").trim();
+  if (!raw) return showAdminMenu(player);
+  let results;
+  if (/^#?\d+$/.test(raw)) {
+    const id = Number(raw.replace("#", ""));
+    const land = getLandById(id);
+    results = land ? [land] : [];
+  } else {
+    const q = playerKey(raw);
+    results = state.lands.filter(l => playerKey(l.owner).includes(q) || String(l.name).toLowerCase().includes(q));
+  }
+  return showAdminLandList(player, 0, results, `搜索：${raw}`);
+}
+
+async function showAdminLandDetail(player, land, back = undefined) {
+  land = getLandById(land.id);
+  if (!land) { tell(player, "这块地皮已不存在。"); return showAdminMenu(player); }
+  const z = landSize(land);
+  const body = `地皮ID：#${land.id}\n名称：${land.name}\n地主：${land.owner}\n描述：${land.description||"无"}\n维度：${land.dimension}\nX：${land.x1} ~ ${land.x2}\nZ：${land.z1} ~ ${land.z2}\n大小：${z.width}×${z.length} = ${z.area}格\nHome：${land.home ? `${Math.floor(land.home.x)}, ${Math.floor(land.home.y)}, ${Math.floor(land.home.z)}` : "未设置"}\n信任：${land.trust.length ? land.trust.join(", ") : "无"}\n黑名单：${land.blacklist?.length ? land.blacklist.join(", ") : "无"}\n访客传送：${land.flags.visit ? "开启" : "关闭"}\n公开大厅：${land.publicListed?"是":"否"}\n出售：${land.forSale?formatMoney(land.salePrice):"否"}`;
+  const form = new ActionFormData().title(`管理员 · #${land.id} ${land.name}`).body(body)
+    .button("传送到此地皮")
+    .button("查看 Flags")
+    .button("删除此地皮")
+    .button("返回");
+  const r = await showFormSafe(player, form, "管理员地皮详情");
+  if (!r || r.canceled) return;
+  if (r.selection === 0) { safeTeleport(player, land, {admin:true}); return; }
+  if (r.selection === 1) {
+    const lines = FLAG_NAMES.map(k => `${land.flags[k] ? "§aON §r" : "§cOFF§r"} §e${k}§r - ${FLAG_DESCRIPTIONS[k]}`).join("\n");
+    const f = new ActionFormData().title(`#${land.id} Flags`).body(lines).button("返回详情");
+    await showFormSafe(player, f, "管理员查看Flags");
+    return showAdminLandDetail(player, land, back);
+  }
+  if (r.selection === 2) return showAdminDeleteConfirm(player, land, back);
+  if (back) return showAdminLandList(player, back.page, back.lands, back.title);
+  return showAdminMenu(player);
+}
+
+async function showAdminDeleteConfirm(player, land, back = undefined) {
+  const form = new MessageFormData().title("管理员删除地皮")
+    .body(`确认永久删除 #${land.id} ${land.name}？\n地主：${land.owner}\n\n此操作不可撤销。`)
+    .button1("取消")
+    .button2("确认删除");
+  const r = await showFormSafe(player, form, "管理员删除确认");
+  if (!r || r.canceled || r.selection !== 1) return showAdminLandDetail(player, land, back);
+  state.lands = state.lands.filter(x => x.id !== land.id);
+  refreshNextId();
+  saveData();
+  tell(player, `管理员已删除 §e#${land.id} ${land.name}§r。`);
+  if (back) return showAdminLandList(player, back.page, back.lands.filter(x=>x.id!==land.id), back.title);
+  return showAdminMenu(player);
+}
+
+function getOriginPlayer(origin) {
+  const e = origin?.sourceEntity;
+  return e && e.typeId === "minecraft:player" ? e : undefined;
+}
+function register(registry, def, callback) {
+  registry.registerCommand(def, (...args) => {
+    try { return callback(...args) ?? ok(); }
+    catch (e) { logError(`命令 ${def.name}`, e); return fail("命令执行失败，请查看内容日志"); }
+  });
+}
+
+world.afterEvents.worldLoad.subscribe(() => {
+  loadData();
+  console.warn(`[myLand] v${VERSION} 已加载 ${state.lands.length} 块地皮；Bedrock 26.45 / @minecraft/server 2.9.0`);
+});
+
+world.afterEvents.playerSpawn.subscribe((event) => {
+  if (!event.initialSpawn) return;
+  system.run(() => {
+    loadData();
+    const key=playerKey(event.player.name); const had=Object.prototype.hasOwnProperty.call(state.economy?.balances||{},key); getBalanceByName(event.player.name,true); if(!had)saveData();
+    tell(event.player, `地皮系统 v${VERSION} 已启用。木锄右键两点圈地后确认创建；指南针始终打开服务器辅助总菜单（与生存辅助共存时自动合并入口）；/myland:menu 可直接打开。余额：${formatMoney(getBalanceByName(event.player.name,true))}`);
+  });
+});
+
+// Compass menu coordination:
+// myLand handles the compass when alone; when Survival Helper is present it yields the compass.
+// Cross-plugin GUI requests are delivered by short-lived player tags instead of runCommand().
+world.afterEvents.itemUse.subscribe((event) => {
+  if (event.itemStack?.typeId !== MENU_ITEM) return;
+  const player = event.source;
+  system.runTimeout(() => {
+    if (!player?.isValid) return;
+    if (bridgeAlive(BRIDGE_OTHER)) return;
+    void showCompassHub(player);
+  }, 2);
+});
+
+world.beforeEvents.playerInteractWithBlock.subscribe((event) => {
+  if (!loaded) return;
+  if (event.itemStack?.typeId === SELECT_ITEM) {
+    event.cancel = true;
+    if (event.isFirstEvent) {
+      const p = event.block.location;
+      const point = { x: p.x, y: p.y, z: p.z, dimension: event.player.dimension.id };
+      system.run(() => createLandFromSelection(event.player, point));
+    }
+    return;
+  }
+  const land = getLandAt(event.block.location, event.player.dimension.id);
+  if (!land) return;
+  const flag = interactionFlag(event.block.typeId);
+  if (!can(event.player, land, flag)) {
+    event.cancel = true;
+    deny(event.player, land, flag === "container" ? "使用容器" : flag === "door" ? "开关门" : flag === "switch" ? "操作开关" : flag === "redstone" ? "操作红石" : "与方块交互");
+  }
+});
+
+world.beforeEvents.playerBreakBlock.subscribe((event) => {
+  if (!loaded) return;
+  const land = getLandAt(event.block.location, event.dimension.id);
+  if (land && !can(event.player, land, "build")) {
+    event.cancel = true;
+    deny(event.player, land, "破坏方块");
+  }
+});
+
+// 2.9.0 stable 中 playerPlaceBlock before-event 在 26.45 环境可能不可用，使用 after-event 回滚。
+world.afterEvents.playerPlaceBlock.subscribe((event) => {
+  if (!loaded) return;
+  const land = getLandAt(event.block.location, event.dimension.id);
+  if (!land || can(event.player, land, "build")) return;
+  system.run(() => {
+    try { event.block.setType("minecraft:air"); deny(event.player, land, "放置方块"); }
+    catch (e) { logError("回滚非法放置失败", e); }
+  });
+});
+
+if (world.beforeEvents.playerInteractWithEntity) world.beforeEvents.playerInteractWithEntity.subscribe((event) => {
+  if (!loaded) return;
+  const land = getLandAt(event.target.location, event.player.dimension.id);
+  if (land && !can(event.player, land, "entity")) {
+    event.cancel = true;
+    deny(event.player, land, "与实体交互");
+  }
+});
+
+if (world.beforeEvents.entityHurt) world.beforeEvents.entityHurt.subscribe((event) => {
+  if (!loaded) return;
+  const hurt = event.hurtEntity;
+  const land = getLandAt(hurt.location, hurt.dimension.id);
+  if (!land) return;
+  const attacker = event.damageSource?.damagingEntity;
+  if (!attacker || attacker.typeId !== "minecraft:player") return;
+  const isPlayerTarget = hurt.typeId === "minecraft:player";
+  const flag = isPlayerTarget ? "pvp" : "entity";
+  if (!can(attacker, land, flag)) {
+    event.cancel = true;
+    system.run(() => tell(attacker, `§c这里禁止${isPlayerTarget ? "PVP" : "攻击实体"}。§r`));
+  }
+});
+
+if (world.afterEvents.entityHurt) world.afterEvents.entityHurt.subscribe((event) => {
+  try {
+    const attacker=event.damageSource?.damagingEntity, hurt=event.hurtEntity;
+    if(attacker?.typeId==="minecraft:player" && hurt?.typeId==="minecraft:player"){
+      const until=Date.now()+COMBAT_BLOCK_MS;
+      combatUntil.set(playerKey(attacker.name),until);combatUntil.set(playerKey(hurt.name),until);
+    }
+  } catch(e){ logError("战斗状态记录失败",e); }
+});
+
+// Buckets / ignition protection. In 2.9.0 itemUse is a stable cancellable event;
+// raycast the block a player is aiming at so visitors cannot pour fluids or ignite blocks in claims.
+if (world.beforeEvents.itemUse) world.beforeEvents.itemUse.subscribe((event) => {
+  if (!loaded) return;
+  const id = event.itemStack?.typeId ?? "";
+  const fluidItem = id === "minecraft:water_bucket" || id === "minecraft:lava_bucket" || id === "minecraft:bucket" || id === "minecraft:powder_snow_bucket" || id === "minecraft:cod_bucket" || id === "minecraft:salmon_bucket" || id === "minecraft:pufferfish_bucket" || id === "minecraft:tropical_fish_bucket" || id === "minecraft:axolotl_bucket" || id === "minecraft:tadpole_bucket";
+  const fireItem = id === "minecraft:flint_and_steel" || id === "minecraft:fire_charge";
+  if (!fluidItem && !fireItem) return;
+  try {
+    const hit = event.source.getBlockFromViewDirection({ maxDistance: 7, includeLiquidBlocks: true, includePassableBlocks: true });
+    if (!hit?.block) return;
+    const land = getLandAt(hit.block.location, event.source.dimension.id);
+    if (!land) return;
+    const flag = fluidItem ? "fluid" : "fire";
+    if (!can(event.source, land, flag)) {
+      event.cancel = true;
+      deny(event.source, land, fluidItem ? "使用流体桶" : "点火");
+    }
+  } catch (e) { logError("桶/点火保护失败", e); }
+});
+
+if (world.beforeEvents.explosion) world.beforeEvents.explosion.subscribe((event) => {
+  if (!loaded) return;
+  try {
+    const impacted = event.getImpactedBlocks();
+    const kept = impacted.filter(block => {
+      const land = getLandAt(block.location, block.dimension.id);
+      return !land || land.flags.explosion === true;
+    });
+    if (kept.length !== impacted.length) event.setImpactedBlocks(kept);
+  } catch (e) { logError("爆炸保护失败", e); }
+});
+
+// 稳定 2.9.0 只有 pistonActivate after-event：用于检测跨地皮活塞并阻止后续持续动作。
+// 无法在稳定 API 中真正 pre-cancel 第一次红石推动，因此这里只做边界检测与告警/停用活塞兜底。
+if (world.afterEvents.pistonActivate) world.afterEvents.pistonActivate.subscribe((event) => {
+  if (!loaded || !event.isExpanding) return;
+  try {
+    const pistonBlock = event.piston.block;
+    const dim = pistonBlock.dimension;
+    const pistonLand = getLandAt(pistonBlock.location, dim.id);
+    const attached = event.piston.getAttachedBlocksLocations();
+    let crossedProtected = false;
+    for (const loc of attached) {
+      const targetLand = getLandAt(loc, dim.id);
+      if (targetLand && targetLand !== pistonLand && !targetLand.flags.piston) { crossedProtected = true; break; }
+      if (pistonLand && !pistonLand.flags.piston && !pointInLand(loc, dim.id, pistonLand)) { crossedProtected = true; break; }
+    }
+    if (crossedProtected) {
+      system.run(() => {
+        try {
+          // 稳定 API 无可取消的活塞前置事件；检测到违规跨界后移除活塞，避免连续推动。
+          pistonBlock.setType("minecraft:air");
+          console.warn(`[myLand] 检测并移除跨地皮活塞 @ ${pistonBlock.location.x},${pistonBlock.location.y},${pistonBlock.location.z}`);
+        } catch (e) { logError("跨地皮活塞兜底失败", e); }
+      });
+    }
+  } catch (e) { logError("活塞边界检测失败", e); }
+});
+
+system.beforeEvents.startup.subscribe((event) => {
+  const r = event.customCommandRegistry;
+  const any = CommandPermissionLevel.Any;
+  const admin = CommandPermissionLevel.Admin;
+  const intOpt = [{ name: "landId", type: CustomCommandParamType.Integer }];
+
+  // 使用真正的命令枚举，让聊天框在输入子参数时直接给出可选项。
+  r.registerEnum("myland:flag_name", FLAG_NAMES);
+  r.registerEnum("myland:flag_preset", ["private", "visit", "social", "open"]);
+  r.registerEnum("myland:admin_action", ["menu", "list", "info", "delete", "tp", "stats", "bypass"]);
+
+  register(r, { name:"myland:help", description:"查看地皮帮助", permissionLevel:any, cheatsRequired:false }, (origin) => {
+    const p = getOriginPlayer(origin); if (!p) return fail("只能由玩家执行");
+    system.run(() => tell(p,
+      "§e/myland:menu§r 打开图形化地皮管理界面（公开大厅、经济、黑名单、出售等均在 GUI）\n"+
+      "§e木锄右键两点§r：圈地（全高度）\n"+
+      "§e/myland:list§r 地皮列表 | §e/myland:here§r 当前地皮 | §e/myland:info [ID]§r 详情\n"+
+      "§e/myland:name <ID> <名称>§r | §e/myland:tp [ID]§r | §e/myland:visit <ID>§r 访问公开地皮\n"+
+      "§e/myland:sethome [ID]§r 设置传送点 | §e/myland:delete [ID]§r | §e/myland:transfer <ID> <玩家名>§r\n"+
+      "§e/myland:trust <ID> <玩家名>§r | §e/myland:untrust <ID> <玩家名>§r | §e/myland:trustlist [ID]§r\n"+
+      "§e/myland:flags [ID]§r 查看权限说明 | §e/myland:flag <ID> <权限> <true/false>§r\n"+
+      "§e/myland:flagpreset <ID> <private/visit/social/open>§r | §e/myland:flagreset [ID]§r\n"+
+      "§e/myland:tool§r 获取圈地木锄 | §e/myland:stats§r 查看统计 | §e/myland:cancel§r 取消选点\n"+
+      "§6管理员：§e/myland:admin menu§r 打开管理员 GUI（搜索、数据维护、经济等均在 GUI）"
+    )); return ok();
+  });
+
+  register(r, { name:"myland:menu", description:"打开地皮管理图形界面", permissionLevel:any, cheatsRequired:false }, (origin) => {
+    const p=getOriginPlayer(origin); if(!p) return fail("只能由玩家执行");
+    system.run(() => { void showMainMenu(p); }); return ok();
+  });
+
+  register(r, { name:"myland:hall", description:"打开公开地皮大厅", permissionLevel:any, cheatsRequired:false }, (origin) => {
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{void showPublicHall(p,0);});return ok();
+  });
+
+  register(r, { name:"myland:balance", description:"查看地皮经济余额", permissionLevel:any, cheatsRequired:false }, (origin) => {
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>tell(p,`当前余额：${formatMoney(getBalanceByName(p.name,true))}`));return ok();
+  });
+
+  register(r, { name:"myland:border", description:"显示脚下/自己的地皮边界", permissionLevel:any, cheatsRequired:false, optionalParameters:intOpt }, (origin,id) => {
+    const p=getOriginPlayer(origin);if(!p)return fail("只能由玩家执行");system.run(()=>{const l=Number.isInteger(id)?getLandById(id):(getLandAt(p.location,p.dimension.id)||resolveOwnLand(p));if(!l)return tell(p,"找不到目标地皮。");if(!l.publicListed&&!isOwner(p,l)&&!isTrusted(p,l)&&!isBypass(p))return tell(p,"你没有权限查看该地皮边界。");showLandBorder(p,l);});return ok();
+  });
+
+  register(r, { name:"myland:list", description:"列出自己的地皮", permissionLevel:any, cheatsRequired:false }, (origin) => {
+    const p=getOriginPlayer(origin); if(!p) return fail("只能由玩家执行");
+    system.run(()=>{ const arr=getPlayerLands(p.name); tell(p, arr.length ? `你的地皮（${arr.length} 块）：\n${arr.map(l=>`§e#${l.id}§r ${l.name} (${landSize(l).width}×${landSize(l).length})`).join("\n")}` : "你还没有地皮。木锄右键两个方块即可创建。"); }); return ok();
+  });
+
+  register(r, { name:"myland:info", description:"查看地皮信息", permissionLevel:any, cheatsRequired:false, optionalParameters:intOpt }, (origin, id) => {
+    const p=getOriginPlayer(origin); if(!p) return fail("只能由玩家执行");
+    system.run(()=>{ const l=resolveOwnLand(p, Number.isInteger(id)?id:undefined); tell(p,l?formatLand(l,true):"找不到你的这块地皮。"); }); return ok();
