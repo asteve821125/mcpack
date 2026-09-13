@@ -1,0 +1,18 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "玩家商店 26.45 v1.0.0",
+    "description": "普通箱子 + 橡木告示牌玩家商店；多商品、实时库存、市场搜索、共享金币、离线交易与三插件菜单协同。",
+    "uuid": "e786eba6-9ea6-41d1-8b52-767866b0f8aa",
+    "version": [1,0,0],
+    "min_engine_version": [1,26,40]
+  },
+  "modules": [
+    {"type":"data","uuid":"5ae69e80-a493-451d-a74a-c48b17f3a579","version":[1,0,0]},
+    {"type":"script","language":"javascript","uuid":"16a8cc45-a4e8-460b-950c-c1f696b804b3","entry":"scripts/main.js","version":[1,0,0]}
+  ],
+  "dependencies": [
+    {"module_name":"@minecraft/server","version":"2.9.0"},
+    {"module_name":"@minecraft/server-ui","version":"2.1.0"}
+  ]
+}
