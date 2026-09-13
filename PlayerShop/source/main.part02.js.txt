@@ -1,0 +1,65 @@
+function getBalance(name, initialize=true){const o=getMoneyObjective();if(!o)return START_BALANCE;try{let n=o.getScore(moneyKey(name));if(n===undefined&&initialize){o.setScore(moneyKey(name),START_BALANCE);n=START_BALANCE;}return Math.max(0,Math.floor(Number(n)||0));}catch{return START_BALANCE;}}
+function setBalance(name,value){const o=getMoneyObjective();if(!o)return false;try{o.setScore(moneyKey(name),Math.max(0,Math.min(2000000000,Math.floor(Number(value)||0))));return true;}catch{return false;}}
+function addBalance(name,delta){const next=Math.max(0,Math.min(2000000000,getBalance(name,true)+Math.floor(Number(delta)||0));setBalance(name,next);return next;}
+
+function normalizeState(raw){
+  if(!raw||typeof raw!=="object")throw new Error("invalid state");
+  const shops=Array.isArray(raw.shops)?raw.shops.filter(s=>s&&Number.isInteger(s.id)&&s.id>0&&typeof s.owner==="string"&&typeof s.dimension==="string"&&Array.isArray(s.chests)&&s.sign):[];
+  const used=new Set(); for(const s of shops){if(used.has(s.id))throw new Error("duplicate shop id");used.add(s.id);s.products=s.products&&typeof s.products==="object"?s.products:{};}
+  let next=1;while(used.has(next))next++;
+  return {version:1,nextId:next,shops,settings:{taxPercent:Math.max(0,Math.min(100,Number(raw.settings?.taxPercent)||0)),defaultShopLimit:Math.max(0,Math.min(100,Math.floor(Number(raw.settings?.defaultShopLimit)||DEFAULT_SHOP_LIMIT)))},trades:Array.isArray(raw.trades)?raw.trades.slice(-MAX_TRADES):[]};
+}
+function loadData(){if(loaded)return;loaded=true;try{const metaRaw=world.getDynamicProperty(META_KEY);if(typeof metaRaw!=="string"){state=normalizeState(state);return;}const meta=JSON.parse(metaRaw);let text="";for(let i=0;i<meta.chunks;i++){const p=world.getDynamicProperty(`${DATA_KEY}${i}`);if(typeof p!=="string")throw new Error(`missing chunk ${i}`);text+=p;}state=normalizeState(JSON.parse(text));lastChunkCount=meta.chunks;}catch(e){log("读取数据失败",e);state=normalizeState(state);}}
+function saveData(){if(!loaded)return false;try{const text=JSON.stringify(state);const count=Math.max(1,Math.ceil(text.length/CHUNK_SIZE));for(let i=0;i<count;i++)world.setDynamicProperty(`${DATA_KEY}${i}`,text.slice(i*CHUNK_SIZE,(i+1)*CHUNK_SIZE));for(let i=count;i<lastChunkCount;i++)world.setDynamicProperty(`${DATA_KEY}${i}`,undefined);world.setDynamicProperty(META_KEY,JSON.stringify({version:1,chunks:count,savedAt:Date.now()}));lastChunkCount=count;return true;}catch(e){log("保存数据失败",e);return false;}}
+function nextShopId(){const used=new Set(state.shops.map(s=>s.id));let id=1;while(used.has(id))id++;state.nextId=id;return id;}
+
+function getShopBlockObjective(){try{return world.scoreboard.getObjective(SHOP_BLOCK_OBJECTIVE)??world.scoreboard.addObjective(SHOP_BLOCK_OBJECTIVE,"玩家商店保护块");}catch{return undefined;}}
+function markShopBlock(dimensionId,loc,on=true){const o=getShopBlockObjective();if(!o)return;const key=locKey(dimensionId,loc);try{if(on)o.setScore(key,1);else o.removeParticipant(key);}catch{}}
+function rebuildShopBlockIndex(){const o=getShopBlockObjective();if(!o)return;try{for(const p of o.getParticipants())o.removeParticipant(p);}catch{}for(const shop of state.shops){for(const c of shop.chests)markShopBlock(shop.dimension,c,true);markShopBlock(shop.dimension,shop.sign,true);}}
+function findShopByBlock(block){if(!block)return undefined;const key=locKey(block.dimension.id,block.location);return state.shops.find(s=>s.dimension===block.dimension.id&&(s.chests.some(c=>locKey(s.dimension,c)===key)||locKey(s.dimension,s.sign)===key));}
+function getShopById(id){return state.shops.find(s=>s.id===Number(id));}
+function shopsOf(name){return state.shops.filter(s=>sameName(s.owner,name));}
+
+function getChestContainerAt(dimensionId,loc){try{const dim=world.getDimension(dimensionId.replace("minecraft:",""));const block=dim.getBlock(loc);if(!block||block.typeId!==CHEST_ID)return undefined;return block.getComponent("minecraft:inventory")?.container;}catch{return undefined;}}
+function resolveChestBlocks(block){
+  const result=[copyLoc(block.location)];
+  try{
+    const container=block.getComponent("minecraft:inventory")?.container;
+    if(!container||container.size<=27)return result;
+    for(const [dx,dz] of [[1,0],[-1,0],[0,1],[0,-1]]){
+      const other=block.dimension.getBlock({x:block.location.x+dx,y:block.location.y,z:block.location.z+dz});
+      if(other?.typeId!==CHEST_ID)continue;
+      const oc=other.getComponent("minecraft:inventory")?.container;
+      if(oc&&oc.size===container.size){result.push(copyLoc(other.location));break;}
+    }
+  }catch{}
+  return result;
+}
+function shopContainer(shop){for(const c of shop.chests){const container=getChestContainerAt(shop.dimension,c);if(container)return container;}return undefined;}
+function adjacentBlocks(block){const l=block.location;return [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].map(([x,y,z])=>block.dimension.getBlock({x:l.x+x,y:l.y+y,z:l.z+z})).filter(Boolean);}
+function findAdjacentSign(chest){for(const b of adjacentBlocks(chest)){try{if(b.getComponent("minecraft:sign"))return b;}catch{}}return undefined;}
+
+function enchantData(item){try{return (item.getComponent("minecraft:enchantable")?.getEnchantments()??[]).map(e=>({id:e.type?.id??String(e.type),level:e.level})).sort((a,b)=>a.id.localeCompare(b.id));}catch{return[];}}
+function durabilityData(item){try{const d=item.getComponent("minecraft:durability");return d?{damage:d.damage,max:d.maxDurability}:undefined;}catch{return undefined;}}
+function potionData(item){try{const p=item.getComponent("minecraft:potion");if(!p)return undefined;return {effect:p.potionEffectType?.id??String(p.potionEffectType??""),liquid:p.potionLiquidType?.id??String(p.potionLiquidType??"")};}catch{return undefined;}}
+function itemFingerprint(item){
+  try{return JSON.stringify({type:item.typeId,name:item.nameTag??"",lore:item.getLore?.()??[],ench:enchantData(item),dur:durabilityData(item),potion:potionData(item)});}catch{return JSON.stringify({type:item.typeId,name:item.nameTag??""});}
+}
+function itemLabel(item){const custom=cleanText(item?.nameTag,40);if(custom)return custom;return String(item?.typeId??"minecraft:air").replace("minecraft:","").replaceAll("_"," ");}
+function scanInventory(shop){
+  const c=shopContainer(shop);if(!c)return {loaded:false,groups:new Map()};
+  const groups=new Map();
+  for(let i=0;i<c.size;i++){const item=c.getItem(i);if(!item)continue;const fp=itemFingerprint(item);let g=groups.get(fp);if(!g){g={fingerprint:fp,label:itemLabel(item),typeId:item.typeId,amount:0,sample:item,slots:[]};groups.set(fp,g);}g.amount+=item.amount;g.slots.push(i);}
+  for(const [fp,p] of Object.entries(shop.products)){p.lastStock=groups.get(fp)?.amount??0;}for(const [fp,g] of groups){if(shop.products[fp]){shop.products[fp].label=g.label;shop.products[fp].typeId=g.typeId;}}
+  return {loaded:true,groups};
+}
+function productRows(shop, includeUnpriced=false){const scan=scanInventory(shop);const map=new Map();for(const [fp,p] of Object.entries(shop.products)){map.set(fp,{fingerprint:fp,...p,stock:scan.loaded?(scan.groups.get(fp)?.amount??0):(p.lastStock??0),present:scan.groups.has(fp)});}if(includeUnpriced&&scan.loaded){for(const [fp,g] of scan.groups){if(!map.has(fp))map.set(fp,{fingerprint:fp,label:g.label,typeId:g.typeId,price:0,lastStock:g.amount,stock:g.amount,present:true});}}return [...map.values()];}
+
+function writeShopSign(shop){try{const dim=world.getDimension(shop.dimension.replace("minecraft:",""));const block=dim.getBlock(shop.sign);const sign=block?.getComponent("minecraft:sign");if(!sign)return false;sign.setText(`“${shop.owner}”的商店`);try{sign.setWaxed(true);}catch{}return true;}catch(e){log("写入商店告示牌失败",e);return false;}}
+function shopDisplayName(shop){return `“${shop.owner}”的商店`;} 
+
+function requestLandOwnership(player,chestLoc,onResult){
+  if(!bridgeAlive("myland")){onResult(true);return;}
+  try{
+    player.removeTag("shop:landok");player.removeTag("shop:landdeny");
+    player.addTag(`shop:landcheck:${dimCode(player.dimension.id)}:${Math.floor(chestLoc.x)}:${Math.floor(chestLoc.y)}:${Math.floor(chestLoc.z)}`);
