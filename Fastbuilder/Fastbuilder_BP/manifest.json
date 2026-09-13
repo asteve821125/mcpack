@@ -1,0 +1,18 @@
+{
+    "format_version": 2,
+    "header": {
+        "description": "快速建造",
+        "min_engine_version": [1,21,12],
+        "name": "快速建造",
+        "uuid": "2f5a54cd-c59b-4604-bde8-061e3b43979c",
+        "version": [1,0,0]
+    },
+    "modules": [
+        {"description":"","type":"data","uuid":"01ecfac3-c35a-4b8c-820d-0addc1b7ad8d","version":[1,0,0]},
+        {"description":"快速建造的主要功能","type":"script","language":"javascript","uuid":"89669b24-609e-422b-8266-1d88bd825ec4","entry":"scripts/main.js","version":[1,0,0]}
+    ],
+    "dependencies": [
+        {"module_name":"@minecraft/server","version":"2.5.0-beta"},
+        {"uuid":"c2a9804d-709d-4da9-99fd-4854af200c42","version":[1,0,0]}
+    ]
+}

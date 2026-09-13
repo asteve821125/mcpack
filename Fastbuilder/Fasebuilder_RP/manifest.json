@@ -1,0 +1,12 @@
+{
+    "format_version": 2,
+    "header": {
+        "description": "快速建造",
+        "min_engine_version": [1,21,12],
+        "name": "快速建造",
+        "uuid": "c2a9804d-709d-4da9-99fd-4854af200c42",
+        "version": [1,0,0]
+    },
+    "modules": [{"description":"","type":"resources","uuid":"266f4885-8b0e-496b-a91b-6fc545e45c86","version":[1,0,0]}],
+    "dependencies": [{"uuid":"2f5a54cd-c59b-4604-bde8-061e3b43979c","version":[1,0,0]}]
+}
