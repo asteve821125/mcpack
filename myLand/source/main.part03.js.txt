@@ -1,0 +1,200 @@
+    .textField("进入欢迎语","例如：欢迎来到我的家",{defaultValue:land.welcome||""})
+    .textField("离开提示","例如：欢迎下次再来",{defaultValue:land.farewell||""});
+  const r=await showFormSafe(player,form,"地皮文字设置");if(!r||r.canceled)return showLandManageMenu(player,land);
+  land.description=cleanText(r.formValues?.[0],160);
+  land.welcome=cleanText(r.formValues?.[1],100);
+  land.farewell=cleanText(r.formValues?.[2],100);
+  saveData();tell(player,"地皮描述与进出提示已保存。");return showLandManageMenu(player,land);
+}
+
+async function showBlacklistMenu(player, land){
+  land=getLandById(land.id);if(!land)return;
+  const list=land.blacklist||[];
+  const form=new ActionFormData().title("地皮黑名单").body(`黑名单玩家无法进入、访问或操作此地皮。\n当前：${list.length?list.join(", "):"无"}`).button("添加黑名单玩家");
+  for(const n of list)form.button(`移除：${n}`);
+  form.button("返回");
+  const r=await showFormSafe(player,form,"黑名单");if(!r||r.canceled)return;
+  if(r.selection===0){
+    const m=new ModalFormData().title("添加黑名单").textField("玩家名","输入完整玩家名");
+    const a=await showFormSafe(player,m,"添加黑名单");
+    if(a&&!a.canceled){const n=cleanText(a.formValues?.[0],40);if(n&&!nameEquals(n,player.name)&&!land.blacklist.some(x=>nameEquals(x,n))){land.blacklist.push(n);land.trust=land.trust.filter(x=>!nameEquals(x,n));saveData();tell(player,`已将 §e${n}§r 加入黑名单。`);}}
+    return showBlacklistMenu(player,land);
+  }
+  if(r.selection>=1&&r.selection<=list.length){const n=list[r.selection-1];land.blacklist.splice(r.selection-1,1);saveData();tell(player,`已将 §e${n}§r 移出黑名单。`);return showBlacklistMenu(player,land);}
+  return showLandManageMenu(player,land);
+}
+
+async function showLandMarketSettings(player, land){
+  land=getLandById(land.id);if(!land)return;
+  const form=new ActionFormData().title("公开大厅 / 出售")
+    .body(`公开大厅：${land.publicListed?"已展示":"未展示"}\n访客传送：${land.flags.visit?"开启":"关闭"}\n出售状态：${land.forSale?`出售中 · ${formatMoney(land.salePrice)}`:"未出售"}\n\n公开展示不会自动开放传送；访客是否能 TP 仍由 visit Flag 控制。`)
+    .button(`公开大厅：${land.publicListed?"关闭":"开启"}`)
+    .button(`访客传送：${land.flags.visit?"关闭":"开启"}`)
+    .button(land.forSale?"修改售价":"挂牌出售")
+    .button("取消出售")
+    .button("返回");
+  const r=await showFormSafe(player,form,"市场设置");if(!r||r.canceled)return;
+  if(r.selection===0){land.publicListed=!land.publicListed;saveData();return showLandMarketSettings(player,land);}
+  if(r.selection===1){land.flags.visit=!land.flags.visit;saveData();return showLandMarketSettings(player,land);}
+  if(r.selection===2){
+    const m=new ModalFormData().title("设置售价").textField("出售价格（金币）","例如 15000",{defaultValue:String(land.salePrice||Math.max(1000,claimCost(landSize(land).area)*2))});
+    const a=await showFormSafe(player,m,"设置售价");if(!a||a.canceled)return showLandMarketSettings(player,land);
+    const price=Math.floor(Number(a.formValues?.[0]));
+    if(!Number.isFinite(price)||price<=0||price>2000000000){tell(player,"售价必须是 1 ~ 2,000,000,000 的整数。");return showLandMarketSettings(player,land);}
+    land.salePrice=price;land.forSale=true;land.publicListed=true;saveData();tell(player,`#${land.id} 已挂牌出售：${formatMoney(price)}。`);return showLandMarketSettings(player,land);
+  }
+  if(r.selection===3){land.forSale=false;land.salePrice=0;saveData();tell(player,"已取消出售。");return showLandMarketSettings(player,land);}
+  return showLandManageMenu(player,land);
+}
+
+async function showEconomyMenu(player){
+  const mine=getPlayerLands(player.name);const selling=mine.filter(l=>l.forSale);
+  const form=new ActionFormData().title("地皮经济中心")
+    .body(`当前余额：${formatMoney(getBalanceByName(player.name,true))}\n圈地价格：${CLAIM_PRICE_PER_BLOCK} 金币 / 格\n你正在出售：${selling.length} 块`)
+    .button("浏览出售中的地皮")
+    .button("管理我的出售地皮")
+    .button("返回主菜单");
+  const r=await showFormSafe(player,form,"经济中心");if(!r||r.canceled)return;
+  if(r.selection===0)return showPublicHall(player,0,state.lands.filter(l=>l.forSale),"地皮市场");
+  if(r.selection===1){if(!selling.length){tell(player,"你当前没有挂牌出售的地皮。");return showEconomyMenu(player);}return showLandListMenu(player);}
+  return showMainMenu(player);
+}
+
+async function showPublicHall(player,page=0,source=undefined,title="公开地皮大厅"){
+  const src=(source??state.lands.filter(l=>l.publicListed||l.forSale)).sort((a,b)=>(b.forSale?1:0)-(a.forSale?1:0)||a.id-b.id);
+  const pageSize=15,pages=Math.max(1,Math.ceil(src.length/pageSize));page=Math.max(0,Math.min(page,pages-1));
+  const shown=src.slice(page*pageSize,page*pageSize+pageSize);
+  const form=new ActionFormData().title(`${title} ${page+1}/${pages}`).body(src.length?`共 ${src.length} 块公开地皮。§e[出售]§r 表示可直接购买。`:"目前没有公开地皮。");
+  for(const l of shown)form.button(`${l.forSale?"§e[出售] §r":""}#${l.id} ${l.name}\n${l.owner}${l.forSale?` · ${formatMoney(l.salePrice)}`:""}`);
+  if(page>0)form.button("上一页");if(page<pages-1)form.button("下一页");form.button("返回");
+  const r=await showFormSafe(player,form,"公开大厅");if(!r||r.canceled)return;
+  if(r.selection<shown.length)return showPublicLandDetail(player,shown[r.selection],{page,source:src,title});
+  let idx=shown.length;if(page>0){if(r.selection===idx)return showPublicHall(player,page-1,src,title);idx++;}if(page<pages-1){if(r.selection===idx)return showPublicHall(player,page+1,src,title);idx++;}
+  return showMainMenu(player);
+}
+
+async function showPublicLandDetail(player,land,back){
+  land=getLandById(land.id);if(!land)return showPublicHall(player,back?.page||0,back?.source,back?.title);
+  const z=landSize(land);const blocked=isBlacklisted(player,land);
+  const form=new ActionFormData().title(`#${land.id} ${land.name}`)
+    .body(`地主：${land.owner}\n描述：${land.description||"暂无描述"}\n大小：${z.width}×${z.length}（${z.area}格）\n访客传送：${land.flags.visit?"开放":"关闭"}\n${land.forSale?`售价：${formatMoney(land.salePrice)}`:"未出售"}\n你的余额：${formatMoney(getBalanceByName(player.name,true))}${blocked?"\n§c你在此地皮黑名单中§r":""}`)
+    .button("访问 / 传送")
+    .button("显示边界")
+    .button(land.forSale?"购买此地皮":"不可购买")
+    .button("返回大厅");
+  const r=await showFormSafe(player,form,"公开地皮详情");if(!r||r.canceled)return;
+  if(r.selection===0){if(blocked)return tell(player,"你在该地皮黑名单中。");if(!land.flags.visit&&!isTrusted(player,land)&&!isOwner(player,land))return tell(player,"地主未开放访客传送。");safeTeleport(player,land);return;}
+  if(r.selection===1){showLandBorder(player,land);return showPublicLandDetail(player,land,back);}
+  if(r.selection===2){if(!land.forSale)return showPublicLandDetail(player,land,back);return showBuyLandConfirm(player,land,back);}
+  return showPublicHall(player,back?.page||0,back?.source,back?.title);
+}
+
+async function showBuyLandConfirm(player,land,back){
+  if(isOwner(player,land))return tell(player,"不能购买自己的地皮。");
+  if(isBlacklisted(player,land))return tell(player,"你在该地皮黑名单中，无法购买。");
+  const c=new MessageFormData().title("确认购买地皮").body(`购买 #${land.id} ${land.name}\n卖家：${land.owner}\n价格：${formatMoney(land.salePrice)}\n你的余额：${formatMoney(getBalanceByName(player.name,true))}\n\n购买后将清空原信任/黑名单并恢复私有权限。`).button1("取消").button2("确认购买");
+  const r=await showFormSafe(player,c,"购买确认");if(!r||r.canceled||r.selection!==1)return showPublicLandDetail(player,land,back);
+  land=getLandById(land.id);if(!land||!land.forSale)return tell(player,"该地皮已不再出售。");
+  if(getBalanceByName(player.name,true)<land.salePrice)return tell(player,"余额不足，购买失败。");
+  const seller=land.owner,price=land.salePrice;
+  addBalanceByName(player.name,-price);addBalanceByName(seller,price);
+  land.owner=player.name;land.trust=[];land.blacklist=[];land.flags={...DEFAULT_FLAGS};land.publicListed=false;land.forSale=false;land.salePrice=0;
+  saveData();tell(player,`§a购买成功！§r #${land.id} ${land.name} 已归你所有，支付 ${formatMoney(price)}。`);
+  const online=findOnlinePlayer(seller);if(online)tell(online,`你的 #${land.id} ${land.name} 已被 ${player.name} 购买，到账 ${formatMoney(price)}。`);
+  return showLandManageMenu(player,land);
+}
+
+async function showFlagsMenu(player, land){
+  land=getLandById(land.id);if(!land)return;
+  const form=new ActionFormData().title("公共权限 / Flags").body("ON 表示陌生玩家也允许；地主和信任玩家始终有权限。");
+  for(const f of FLAG_NAMES) form.button(`${land.flags[f]?"§aON":"§cOFF"}§r ${f}\n${FLAG_DESCRIPTIONS[f]}`);
+  form.button("权限预设").button("全部重置为私有").button("返回");
+  const r=await showFormSafe(player,form,"Flags");if(!r||r.canceled)return;
+  if(r.selection<FLAG_NAMES.length){const f=FLAG_NAMES[r.selection];land.flags[f]=!land.flags[f];saveData();return showFlagsMenu(player,land);}
+  if(r.selection===FLAG_NAMES.length)return showPresetMenu(player,land);
+  if(r.selection===FLAG_NAMES.length+1){land.flags={...DEFAULT_FLAGS};saveData();tell(player,"权限已重置为完全私有。");return showFlagsMenu(player,land);}
+  return showLandManageMenu(player,land);
+}
+
+async function showPresetMenu(player, land){
+  const keys=["private","visit","social","open"];const form=new ActionFormData().title("权限预设").body("选择后会覆盖当前 Flags");
+  form.button("private - 完全私有").button("visit - 访客模式").button("social - 社交模式").button("open - 大部分开放").button("返回");
+  const r=await showFormSafe(player,form,"权限预设");if(!r||r.canceled||r.selection===4)return showFlagsMenu(player,land);
+  const k=keys[r.selection];land.flags={...FLAG_PRESETS[k]};saveData();tell(player,`已应用 §e${k}§r 预设。`);return showFlagsMenu(player,land);
+}
+
+async function showTransferMenu(player, land){
+  const m=new ModalFormData().title("转让地皮").textField("目标玩家名","输入完整玩家名");const r=await showFormSafe(player,m,"转让输入");if(!r||r.canceled)return showLandManageMenu(player,land);
+  const n=String(r.formValues?.[0]??"").trim();if(!n||nameEquals(n,player.name)){tell(player,"目标玩家名无效。");return showLandManageMenu(player,land);}
+  const c=new MessageFormData().title("确认转让").body(`确认把 #${land.id} ${land.name} 转让给 ${n}？`).button1("取消").button2("确认转让");const cr=await showFormSafe(player,c,"转让确认");if(!cr||cr.canceled||cr.selection!==1)return showLandManageMenu(player,land);
+  land.owner=n;land.trust=land.trust.filter(x=>!nameEquals(x,n));land.blacklist=land.blacklist.filter(x=>!nameEquals(x,n));if(!land.trust.some(x=>nameEquals(x,player.name)))land.trust.push(player.name);land.forSale=false;land.salePrice=0;land.publicListed=false;saveData();tell(player,`已转让给 §e${n}§r。`);const online=findOnlinePlayer(n);if(online)tell(online,`${player.name} 已将 #${land.id} ${land.name} 转让给你。`);return showLandListMenu(player);
+}
+
+async function showDeleteMenu(player, land){
+  const c=new MessageFormData().title("删除地皮").body(`确定永久删除 #${land.id} ${land.name}？此操作不可撤销。`).button1("取消").button2("确认删除");const r=await showFormSafe(player,c,"删除确认");if(!r||r.canceled||r.selection!==1)return showLandManageMenu(player,land);
+  state.lands=state.lands.filter(x=>x.id!==land.id);refreshNextId();saveData();tell(player,`已删除 #${land.id} ${land.name}。`);return showLandListMenu(player);
+}
+
+
+async function showAdminMenu(player) {
+  loadData();
+  const here = getLandAt(player.location, player.dimension.id);
+  const bypassOn = adminBypass.has(playerKey(player.name));
+  const form = new ActionFormData()
+    .title("地皮管理员面板")
+    .body(`全服地皮：${state.lands.length}/${MAX_TOTAL_LANDS}\n管理员绕过：${bypassOn ? "§a开启" : "§c关闭"}§r\n${here ? `脚下：#${here.id} ${here.name}（${here.owner}）` : "脚下：无地皮"}`)
+    .button(`全服地皮列表 (${state.lands.length})`)
+    .button("搜索地皮 / 地主")
+    .button("查看脚下地皮")
+    .button("服务器统计")
+    .button("数据备份 / 检查 / 修复")
+    .button("经济管理")
+    .button(`管理员 Bypass：${bypassOn ? "§a开启" : "§c关闭"}§r`)
+    .button("关闭");
+  const r = await showFormSafe(player, form, "管理员主菜单");
+  if (!r || r.canceled) return;
+  if (r.selection === 0) return showAdminLandList(player, 0);
+  if (r.selection === 1) return showAdminSearch(player);
+  if (r.selection === 2) { if (!here) { tell(player, "你脚下没有地皮。"); return showAdminMenu(player); } return showAdminLandDetail(player, here); }
+  if (r.selection === 3) return showAdminStats(player);
+  if (r.selection === 4) return showDataMaintenance(player);
+  if (r.selection === 5) return showAdminEconomy(player);
+  if (r.selection === 6) { const k=playerKey(player.name);if(adminBypass.has(k))adminBypass.delete(k);else adminBypass.add(k);tell(player,`管理员绕过已${adminBypass.has(k)?"§a开启":"§c关闭"}§r。`);return showAdminMenu(player); }
+}
+
+async function showAdminStats(player){
+  const owners=new Set(state.lands.map(l=>playerKey(l.owner))).size;
+  const trustedLinks=state.lands.reduce((n,l)=>n+l.trust.length,0), publicVisits=state.lands.filter(l=>l.flags?.visit).length;
+  const selling=state.lands.filter(l=>l.forSale).length, publicCount=state.lands.filter(l=>l.publicListed||l.forSale).length;
+  const dims={};for(const l of state.lands)dims[l.dimension]=(dims[l.dimension]||0)+1;
+  const dimText=Object.entries(dims).map(([k,v])=>`${k.replace("minecraft:","")}: ${v}`).join("\n")||"无";
+  const f=new ActionFormData().title("服务器地皮统计").body(`地皮总数：${state.lands.length}/${MAX_TOTAL_LANDS}\n地主数量：${owners}\n信任关系：${trustedLinks}\n开放访客传送：${publicVisits}\n公开大厅：${publicCount}\n出售中：${selling}\n经济账户：${Object.keys(state.economy?.balances||{}).length}\n下一个可用地皮ID：${state.nextId}\n\n维度分布：\n${dimText}`).button("返回管理员面板");
+  await showFormSafe(player,f,"管理员统计");return showAdminMenu(player);
+}
+
+async function showDataMaintenance(player){
+  const audit=auditData(), backups=getBackupIndex();
+  const form=new ActionFormData().title("数据维护")
+    .body(`当前地皮：${audit.lands}\n重复ID：${audit.duplicateIds}\n重叠对：${audit.overlapPairs}\n信任/黑名单冲突：${audit.blacklistTrustConflicts}\n异常售价：${audit.badSale}\n备份：${backups.length}/${MAX_BACKUPS}\n\n自动修复不会擅自删除重叠地皮，只修复安全可确定的问题。`)
+    .button("创建手动备份").button("查看 / 恢复备份").button("重新检查数据").button("自动修复安全问题").button("返回管理员面板");
+  const r=await showFormSafe(player,form,"数据维护");if(!r||r.canceled)return;
+  if(r.selection===0){const b=createBackup("管理员手动备份",player.name);tell(player,b?`备份创建成功：${b.id}（${b.lands} 块地皮）`:"备份创建失败，请查看日志。");return showDataMaintenance(player);}
+  if(r.selection===1)return showBackupList(player);
+  if(r.selection===2)return showDataMaintenance(player);
+  if(r.selection===3){const out=repairData();tell(player,`修复完成：修复/清理 ${out.changed} 项；重叠地皮仍有 ${out.audit.overlapPairs} 对（不会自动删除）。${out.backup?"已先自动备份。":""}`);return showDataMaintenance(player);}
+  return showAdminMenu(player);
+}
+
+async function showBackupList(player){
+  const list=getBackupIndex();const form=new ActionFormData().title("地皮数据备份").body(list.length?"选择备份查看/恢复":"暂无备份。");
+  for(const b of list)form.button(`${new Date(b.createdAt).toLocaleString()}\n${b.reason} · ${b.lands}块`);form.button("返回");
+  const r=await showFormSafe(player,form,"备份列表");if(!r||r.canceled)return;if(r.selection===list.length)return showDataMaintenance(player);
+  const b=list[r.selection];if(!b)return showDataMaintenance(player);
+  const c=new MessageFormData().title("恢复备份").body(`备份：${b.id}\n时间：${new Date(b.createdAt).toLocaleString()}\n原因：${b.reason}\n地皮：${b.lands}\n\n恢复会覆盖当前地皮与经济数据；恢复前会自动再备份当前数据。`).button1("取消").button2("确认恢复");
+  const cr=await showFormSafe(player,c,"恢复备份");if(!cr||cr.canceled||cr.selection!==1)return showBackupList(player);
+  tell(player,restoreBackup(b.id)?"备份恢复成功。":"备份恢复失败，请查看日志。");return showDataMaintenance(player);
+}
+
+async function showAdminEconomy(player){
+  const form=new ActionFormData().title("经济管理").body(`已记录账户：${Object.keys(state.economy?.balances||{}).length}\n新玩家初始：${formatMoney(START_BALANCE)}\n圈地单价：${CLAIM_PRICE_PER_BLOCK} 金币/格`).button("查询 / 修改玩家余额").button("返回管理员面板");
+  const r=await showFormSafe(player,form,"经济管理");if(!r||r.canceled)return;
