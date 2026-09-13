@@ -1,15 +1,15 @@
 {
   "format_version": 2,
   "header": {
-    "name": "生存辅助 GUI 26.45 v2.7.2",
-    "description": "生存辅助 GUI：修复与 myLand 的跨插件菜单/管理员菜单跳转，指南针统一总菜单；含多个人传送点、TNT投掷、坠落保护、连锁采集、死亡点、TPA、坐标分享、潜行电梯与管理员设置。",
+    "name": "生存辅助 GUI 26.45 v2.8.0",
+    "description": "生存辅助 GUI：支持 myLand 与 PlayerShop 三插件指南针/管理员中心协同；含多个人传送点、TNT投掷、坠落保护、连锁采集、死亡点、TPA、坐标分享、潜行电梯与管理员设置。",
     "uuid": "bc420939-9c71-4f34-a71f-6117dad3ad34",
-    "version": [2,7,2],
+    "version": [2,8,0],
     "min_engine_version": [1,26,40]
   },
   "modules": [
-    {"type":"data","uuid":"3cc68508-b078-49f8-b813-ae8bd40e83c6","version":[2,7,2]},
-    {"type":"script","language":"javascript","uuid":"5d450947-945e-4e78-940b-7fbb061c7887","entry":"scripts/main.js","version":[2,7,2]}
+    {"type":"data","uuid":"3cc68508-b078-49f8-b813-ae8bd40e83c6","version":[2,8,0]},
+    {"type":"script","language":"javascript","uuid":"5d450947-945e-4e78-940b-7fbb061c7887","entry":"scripts/main.js","version":[2,8,0]}
   ],
   "dependencies": [
     {"module_name":"@minecraft/server","version":"2.9.0"},
