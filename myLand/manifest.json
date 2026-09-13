@@ -1,30 +1,18 @@
 {
   "format_version": 2,
   "header": {
-    "description": "Minecraft Bedrock 26.45 正式地皮系统：修复跨插件管理员中心跳转，指南针统一总菜单；含 GUI、经济、公开大厅、黑名单、安全传送、边界粒子、管理员管理与数据备份/修复。",
-    "min_engine_version": [
-      1,
-      26,
-      40
-    ],
-    "name": "我的地皮 26.45 v4.1.2 正式版",
+    "description": "Minecraft Bedrock 26.45 正式地皮系统：共享金币、PlayerShop 兼容、指南针统一总菜单；含 GUI、经济、公开大厅、黑名单、安全传送、管理员管理与数据备份/修复。",
+    "min_engine_version": [1,26,40],
+    "name": "我的地皮 26.45 v4.2.0 正式版",
     "uuid": "564362d8-058b-4dff-8f02-16b35534e943",
-    "version": [
-      1,
-      1,
-      2
-    ]
+    "version": [1,2,0]
   },
   "modules": [
     {
       "description": "我的地皮数据模块",
       "type": "data",
       "uuid": "861a17e6-981b-4db4-935b-99d047d83caf",
-      "version": [
-        1,
-        1,
-        2
-      ]
+      "version": [1,2,0]
     },
     {
       "description": "我的地皮主要功能",
@@ -32,21 +20,11 @@
       "language": "javascript",
       "uuid": "e40f815c-af98-47ac-a1df-8913a4d3d3c7",
       "entry": "scripts/main.js",
-      "version": [
-        1,
-        1,
-        2
-      ]
+      "version": [1,2,0]
     }
   ],
   "dependencies": [
-    {
-      "module_name": "@minecraft/server",
-      "version": "2.9.0"
-    },
-    {
-      "module_name": "@minecraft/server-ui",
-      "version": "2.1.0"
-    }
+    {"module_name":"@minecraft/server","version":"2.9.0"},
+    {"module_name":"@minecraft/server-ui","version":"2.1.0"}
   ]
 }
