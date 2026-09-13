@@ -1,0 +1,491 @@
+      const feet = player.dimension.getBlock({ x, y: y + 1, z });
+      const head = player.dimension.getBlock({ x, y: y + 2, z });
+      if (blockIsFloor(floor) && blockIsPassable(feet) && blockIsPassable(head)) {
+        player.teleport({ x: x + 0.5, y: y + 1.01, z: z + 0.5 }, { dimension: player.dimension, checkForBlocks: false });
+        player.sendMessage("§b[生存辅助] §f已通过潜行电梯向上移动。");
+        return;
+      }
+    } catch {}
+  }
+  player.sendMessage("§e[生存辅助] 上方 32 格内没有找到可站立的平台。");
+}
+
+function roundCoord(value) {
+  return Math.floor(value);
+}
+
+function dimensionName(id) {
+  if (id === "minecraft:overworld" || id === "overworld") return "主世界";
+  if (id === "minecraft:nether" || id === "nether") return "下界";
+  if (id === "minecraft:the_end" || id === "the_end") return "末地";
+  return id;
+}
+
+function getDimensionBySavedId(id) {
+  if (id === "minecraft:overworld" || id === "overworld") return world.getDimension("overworld");
+  if (id === "minecraft:nether" || id === "nether") return world.getDimension("nether");
+  if (id === "minecraft:the_end" || id === "the_end") return world.getDimension("the_end");
+  return undefined;
+}
+
+function makeLocationRecord(player) {
+  return {
+    x: player.location.x,
+    y: player.location.y,
+    z: player.location.z,
+    dimension: player.dimension.id
+  };
+}
+
+function parseLocationRecord(raw) {
+  if (!raw) return undefined;
+  try {
+    const data = JSON.parse(raw);
+    if (
+      typeof data?.x !== "number" ||
+      typeof data?.y !== "number" ||
+      typeof data?.z !== "number" ||
+      typeof data?.dimension !== "string"
+    ) return undefined;
+    return data;
+  } catch {
+    return undefined;
+  }
+}
+
+function validHomeRecord(home) {
+  return !!home &&
+    typeof home.name === "string" && home.name.trim().length > 0 &&
+    typeof home.x === "number" && typeof home.y === "number" &&
+    typeof home.z === "number" && typeof home.dimension === "string";
+}
+
+function normalizeHomeName(name, fallback = "传送点") {
+  const text = String(name ?? "").trim().replace(/[\r\n§]/g, " ").slice(0, 24);
+  return text || fallback;
+}
+
+function getPersonalHomeLimit(player) {
+  try {
+    const value = player.getDynamicProperty(PROP_HOME_LIMIT);
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return Math.max(0, Math.min(MAX_STORED_PERSONAL_HOMES, Math.floor(value)));
+    }
+  } catch {}
+  return DEFAULT_PERSONAL_HOME_LIMIT;
+}
+
+function setPersonalHomeLimit(player, limit) {
+  const value = Math.max(0, Math.min(MAX_STORED_PERSONAL_HOMES, Math.floor(Number(limit) || 0)));
+  try {
+    player.setDynamicProperty(PROP_HOME_LIMIT, value);
+    return true;
+  } catch (error) {
+    console.warn(`[生存辅助] 保存传送点上限失败: ${error}`);
+    return false;
+  }
+}
+
+function getPersonalHomes(player) {
+  let homes = [];
+  const raw = getStringProperty(player, PROP_HOMES);
+  if (raw) {
+    try {
+      const data = JSON.parse(raw);
+      if (Array.isArray(data)) homes = data.filter(validHomeRecord).slice(0, MAX_STORED_PERSONAL_HOMES);
+    } catch (error) {
+      console.warn(`[生存辅助] 读取个人传送点失败: ${error}`);
+    }
+  }
+
+  // One-time migration from v2.5.x single home to the v2.6.0 multi-home list.
+  if (homes.length === 0) {
+    const legacy = parseLocationRecord(getStringProperty(player, PROP_HOME));
+    if (legacy) {
+      homes = [{ name: "默认家园", ...legacy }];
+      savePersonalHomes(player, homes);
+      clearProperty(player, PROP_HOME);
+      try { player.sendMessage("§a[生存辅助] §f旧版家园已自动迁移为“默认家园”。"); } catch {}
+    }
+  }
+  return homes;
+}
+
+function savePersonalHomes(player, homes) {
+  const clean = (Array.isArray(homes) ? homes : []).filter(validHomeRecord).slice(0, MAX_STORED_PERSONAL_HOMES);
+  return setStringProperty(player, PROP_HOMES, JSON.stringify(clean));
+}
+
+function makeNamedHome(player, name) {
+  return { name: normalizeHomeName(name), ...makeLocationRecord(player) };
+}
+
+function formatLocation(data) {
+  return `${dimensionName(data.dimension)}  X:${roundCoord(data.x)} Y:${roundCoord(data.y)} Z:${roundCoord(data.z)}`;
+}
+
+function teleportToRecord(player, data, label) {
+  const dimension = getDimensionBySavedId(data.dimension);
+  if (!dimension) {
+    player.sendMessage(`§c[生存辅助] ${label}所在维度无法识别。`);
+    return;
+  }
+
+  try {
+    player.teleport(
+      { x: data.x, y: data.y, z: data.z },
+      { dimension, checkForBlocks: false }
+    );
+    player.sendMessage(`§a[生存辅助] §f已传送到${label}：${formatLocation(data)}`);
+  } catch (error) {
+    player.sendMessage(`§c[生存辅助] 传送失败，请稍后重试。`);
+    console.warn(`[生存辅助] ${label}传送失败: ${error}`);
+  }
+}
+
+function isHoldingTnt(player) {
+  try {
+    const inventory = player.getComponent("minecraft:inventory")?.container;
+    return inventory?.getItem(player.selectedSlotIndex)?.typeId === TNT_ID;
+  } catch {
+    return false;
+  }
+}
+
+function consumeOneTnt(player) {
+  if (player.getGameMode() === GameMode.Creative) return;
+
+  const inventory = player.getComponent("minecraft:inventory")?.container;
+  if (!inventory) return;
+
+  const slot = player.selectedSlotIndex;
+  const stack = inventory.getItem(slot);
+  if (!stack || stack.typeId !== TNT_ID) return;
+
+  if (stack.amount <= 1) {
+    inventory.setItem(slot, undefined);
+  } else {
+    stack.amount -= 1;
+    inventory.setItem(slot, stack);
+  }
+}
+
+function updateTntDimensionSession(player) {
+  const current = player.dimension.id;
+  const previous = lastKnownDimension.get(player.id);
+
+  if (previous !== current) {
+    // Every dimension transition starts a fresh TNT reminder state.
+    // This makes re-entering the Nether require the one-time reminder again.
+    netherTntAcknowledged.delete(player.id);
+    lastKnownDimension.set(player.id, current);
+  }
+
+  return current;
+}
+
+function throwTnt(player) {
+  if (!tntEnabledFor(player)) return;
+
+  const dimensionId = updateTntDimensionSession(player);
+  if (dimensionId !== NETHER_ID) {
+    const now = system.currentTick;
+    const warnUntil = tntDimensionWarnUntil.get(player.id) ?? 0;
+    if (now >= warnUntil) {
+      tntDimensionWarnUntil.set(player.id, now + 40);
+      system.run(() => {
+        try {
+          player.sendMessage("§c[生存辅助] §fTNT 投掷仅允许在下界使用。");
+        } catch {}
+      });
+    }
+    return;
+  }
+
+  // Only the first TNT-use attempt of each Nether stay shows a reminder.
+  // The reminder itself does not throw TNT; all later attempts in this same
+  // Nether stay throw immediately. Leaving the Nether resets this state.
+  if (!netherTntAcknowledged.has(player.id)) {
+    netherTntAcknowledged.add(player.id);
+    system.run(() => {
+      try {
+        player.sendMessage("§e[生存辅助] §fTNT 投掷已就绪：本次进入下界只提醒这一次；再次潜行使用 TNT 即可投掷，离开下界后会重置。");
+      } catch {}
+    });
+    return;
+  }
+
+  const view = player.getViewDirection();
+  const location = player.location;
+
+  system.run(() => {
+    try {
+      if (!isHoldingTnt(player) || !tntEnabledFor(player)) return;
+      if (player.dimension.id !== NETHER_ID) return;
+
+      const tnt = player.dimension.spawnEntity(TNT_ID, {
+        x: location.x,
+        y: location.y + 1.2,
+        z: location.z
+      });
+
+      tnt.applyImpulse({
+        x: view.x * 0.5,
+        y: view.y * 0.5 + 0.2,
+        z: view.z * 0.5
+      });
+
+      consumeOneTnt(player);
+    } catch (error) {
+      console.warn(`[生存辅助] TNT 投掷失败: ${error}`);
+    }
+  });
+}
+
+async function showCompassHub(player) {
+  if (!player?.isValid) return;
+  try {
+    const hasLand = bridgeAlive(BRIDGE_OTHER);
+    const admin = isAdmin(player);
+    const form = new ActionFormData()
+      .title("§l服务器辅助")
+      .body(hasLand
+        ? "当前已启用：生存辅助、地皮系统。\n\n请选择要进入的系统。"
+        : "当前已启用：生存辅助。\n\n指南针始终打开本总菜单；安装兼容插件后会自动合并入口。")
+      .button("§a生存辅助\n§7采集、传送、玩家互助等");
+    if (hasLand) form.button("§e地皮系统\n§7地皮、经济、公开大厅等");
+    if (admin) form.button("§6管理员中心\n§7管理已启用的插件");
+
+    const response = await form.show(player);
+    if (response.canceled) return;
+    let index = 0;
+    if (response.selection === index++) return system.run(() => showMainMenu(player));
+    if (hasLand) {
+      if (response.selection === index++) {
+        try {
+          player.addTag(BRIDGE_TAG_LAND_MENU);
+        } catch (error) {
+          player.sendMessage("§c[生存辅助] 无法向地皮插件发送菜单请求，请稍后重试。");
+          console.warn(`[生存辅助] 地皮菜单请求失败: ${error}`);
+        }
+        return;
+      }
+    }
+    if (admin && response.selection === index) return system.run(() => showCompassAdminHub(player, hasLand));
+  } catch (error) {
+    console.warn(`[生存辅助] 打开统一指南针菜单失败: ${error}`);
+  }
+}
+
+async function showCompassAdminHub(player, hasLand = bridgeAlive(BRIDGE_OTHER)) {
+  if (!player?.isValid || !isAdmin(player)) return;
+  try {
+    const form = new ActionFormData()
+      .title("§l管理员中心")
+      .body(hasLand ? "当前可管理：生存辅助、地皮系统" : "当前可管理：生存辅助")
+      .button("§a生存辅助管理\n§7全服开关、玩家权限、传送点上限");
+    if (hasLand) form.button("§e地皮系统管理\n§7地皮、经济、备份与修复");
+    form.button("返回总菜单");
+
+    const response = await form.show(player);
+    if (response.canceled) return;
+    let index = 0;
+    if (response.selection === index++) return system.run(() => showAdminMenu(player));
+    if (hasLand) {
+      if (response.selection === index++) {
+        try {
+          player.addTag(BRIDGE_TAG_LAND_ADMIN);
+        } catch (error) {
+          player.sendMessage("§c[生存辅助] 无法向地皮插件发送管理员菜单请求，请稍后重试。");
+          console.warn(`[生存辅助] 地皮管理员菜单请求失败: ${error}`);
+        }
+        return;
+      }
+    }
+    return system.run(() => showCompassHub(player));
+  } catch (error) {
+    console.warn(`[生存辅助] 打开管理员中心失败: ${error}`);
+  }
+}
+
+async function showMainMenu(player) {
+  if (!player?.isValid) return;
+  if (openingMenu.has(player.id)) return;
+
+  openingMenu.add(player.id);
+  try {
+    const personalTnt = boolProperty(player, PROP_TNT, true);
+    const personalSurface = boolProperty(player, PROP_SURFACE, true);
+    const globalTnt = boolProperty(world, PROP_GLOBAL_TNT, true);
+    const globalSurface = boolProperty(world, PROP_GLOBAL_SURFACE, true);
+
+    const form = new ActionFormData()
+      .title("§l生存辅助")
+      .body(
+        `§7版本 ${PLUGIN_VERSION}\n\n` +
+        `TNT 投掷：${statusText(personalTnt && globalTnt)}\n` +
+        `坠落保护：${statusText(personalSurface && globalSurface)}\n\n` +
+        "§8指南针始终先打开服务器辅助总菜单；与地皮系统共存时自动合并入口。更多功能已整理到子菜单。"
+      )
+      .button(`TNT 投掷  ${statusText(personalTnt)}`)
+      .button(`坠落保护  ${statusText(personalSurface)}`)
+      .button("§a采集辅助")
+      .button("§b传送与家园")
+      .button("§d玩家互助")
+      .button("恢复个人默认设置")
+      .button("功能说明");
+
+    if (isAdmin(player)) {
+      form.button("§6管理员 · 全服设置");
+    }
+
+    const response = await form.show(player);
+    if (response.canceled) return;
+
+    switch (response.selection) {
+      case 0:
+        setBoolProperty(player, PROP_TNT, !personalTnt);
+        player.sendMessage(`§a[生存辅助] §fTNT 投掷已${!personalTnt ? "开启" : "关闭"}`);
+        system.run(() => showMainMenu(player));
+        break;
+      case 1:
+        setBoolProperty(player, PROP_SURFACE, !personalSurface);
+        player.sendMessage(`§a[生存辅助] §f坠落保护已${!personalSurface ? "开启" : "关闭"}`);
+        system.run(() => showMainMenu(player));
+        break;
+      case 2:
+        system.run(() => showGatherMenu(player));
+        break;
+      case 3:
+        system.run(() => showTeleportMenu(player));
+        break;
+      case 4:
+        system.run(() => showSocialMenu(player));
+        break;
+      case 5:
+        system.run(() => confirmReset(player));
+        break;
+      case 6:
+        system.run(() => showHelp(player));
+        break;
+      case 7:
+        if (isAdmin(player)) system.run(() => showAdminMenu(player));
+        break;
+    }
+  } catch (error) {
+    console.warn(`[生存辅助] 打开 GUI 失败: ${error}`);
+  } finally {
+    openingMenu.delete(player.id);
+  }
+}
+
+async function showGatherMenu(player) {
+  try {
+    const vein = boolProperty(player, PROP_VEIN, true);
+    const tree = boolProperty(player, PROP_TREE, true);
+    const elevator = boolProperty(player, PROP_ELEVATOR, true);
+    const response = await new ActionFormData()
+      .title("§a采集辅助")
+      .body("连锁挖矿/砍树只在§e潜行破坏方块§f时触发，避免日常误拆。潜行电梯使用§e潜行 + 跳跃§f向上移动。")
+      .button(`连锁挖矿  ${statusText(vein)}${allowedFor(player, ALLOW_KEYS.vein) ? "" : "  §c[无权限]"}`)
+      .button(`连锁砍树  ${statusText(tree)}${allowedFor(player, ALLOW_KEYS.tree) ? "" : "  §c[无权限]"}`)
+      .button(`潜行电梯  ${statusText(elevator)}${allowedFor(player, ALLOW_KEYS.elevator) ? "" : "  §c[无权限]"}`)
+      .button("返回主菜单")
+      .show(player);
+
+    if (response.canceled) return;
+    const items = [
+      [PROP_VEIN, vein, ALLOW_KEYS.vein, "连锁挖矿"],
+      [PROP_TREE, tree, ALLOW_KEYS.tree, "连锁砍树"],
+      [PROP_ELEVATOR, elevator, ALLOW_KEYS.elevator, "潜行电梯"]
+    ];
+    if (response.selection >= 0 && response.selection < 3) {
+      const [key, value, allowKey, label] = items[response.selection];
+      if (!allowedFor(player, allowKey)) {
+        player.sendMessage(`§c[生存辅助] 管理员未授权你使用${label}。`);
+      } else {
+        setBoolProperty(player, key, !value);
+        player.sendMessage(`§a[生存辅助] §f${label}已${!value ? "开启" : "关闭"}`);
+      }
+      system.run(() => showGatherMenu(player));
+    } else if (response.selection === 3) {
+      system.run(() => showMainMenu(player));
+    }
+  } catch (error) {
+    console.warn(`[生存辅助] 采集辅助菜单失败: ${error}`);
+  }
+}
+
+async function showTeleportMenu(player) {
+  try {
+    const homes = getPersonalHomes(player);
+    const homeLimit = getPersonalHomeLimit(player);
+    const death = parseLocationRecord(getStringProperty(player, PROP_DEATH));
+    const homeGlobal = boolProperty(world, PROP_GLOBAL_HOME, true) && allowedFor(player, ALLOW_KEYS.home);
+    const deathGlobal = boolProperty(world, PROP_GLOBAL_DEATH, true) && allowedFor(player, ALLOW_KEYS.death);
+
+    const response = await new ActionFormData()
+      .title("§b传送与家园")
+      .body(
+        `§e个人传送点：§f${homes.length}/${homeLimit}\n` +
+        `§c上次死亡：§f${death ? formatLocation(death) : "暂无记录"}`
+      )
+      .button(`个人传送点管理  §e(${homes.length})${homeGlobal ? "" : "  §c[全服关闭]"}`)
+      .button(`返回上次死亡点${deathGlobal ? "" : "  §c[全服关闭]"}`)
+      .button("返回主菜单")
+      .show(player);
+
+    if (response.canceled) return;
+
+    if (response.selection === 0) {
+      if (!homeGlobal) return player.sendMessage("§c[生存辅助] 管理员已关闭家园功能。"), system.run(() => showTeleportMenu(player));
+      system.run(() => showHomesMenu(player));
+    } else if (response.selection === 1) {
+      if (!deathGlobal) return player.sendMessage("§c[生存辅助] 管理员已关闭返回死亡点功能。"), system.run(() => showTeleportMenu(player));
+      if (!death) return player.sendMessage("§e[生存辅助] 暂无死亡坐标记录。"), system.run(() => showTeleportMenu(player));
+      teleportToRecord(player, death, "上次死亡点");
+    } else if (response.selection === 2) {
+      system.run(() => showMainMenu(player));
+    }
+  } catch (error) {
+    console.warn(`[生存辅助] 传送菜单失败: ${error}`);
+  }
+}
+
+async function showHomesMenu(player) {
+  try {
+    const homes = getPersonalHomes(player);
+    const homeLimit = getPersonalHomeLimit(player);
+    const form = new ActionFormData()
+      .title("§b个人传送点")
+      .body(`已保存 §e${homes.length}§f / §e${homeLimit}§f 个传送点。\n选择一个传送点进行管理。`);
+
+    form.button(homes.length < homeLimit ? "§a＋ 新建传送点" : "§8＋ 新建传送点 [已达上限]");
+    for (const home of homes) {
+      form.button(`§e${home.name}\n§7${formatLocation(home)}`);
+    }
+    form.button("返回");
+
+    const response = await form.show(player);
+    if (response.canceled) return;
+    if (response.selection === 0) {
+      if (homes.length >= homeLimit) {
+        player.sendMessage(`§e[生存辅助] 你的个人传送点上限为 ${homeLimit} 个。`);
+        return system.run(() => showHomesMenu(player));
+      }
+      return system.run(() => showCreateHomeDialog(player));
+    }
+    if (response.selection >= 1 && response.selection <= homes.length) {
+      return system.run(() => showHomeDetailMenu(player, response.selection - 1));
+    }
+    system.run(() => showTeleportMenu(player));
+  } catch (error) {
+    console.warn(`[生存辅助] 个人传送点菜单失败: ${error}`);
+  }
+}
+
+async function showCreateHomeDialog(player) {
+  try {
+    const homes = getPersonalHomes(player);
+    const homeLimit = getPersonalHomeLimit(player);
+    if (homes.length >= homeLimit) return system.run(() => showHomesMenu(player));
