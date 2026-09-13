@@ -1,0 +1,419 @@
+import {
+  CommandPermissionLevel,
+  CustomCommandParamType,
+  CustomCommandStatus,
+  PlayerPermissionLevel,
+  system,
+  world,
+} from "@minecraft/server";
+import { ActionFormData, MessageFormData, ModalFormData } from "@minecraft/server-ui";
+
+const VERSION = "4.1.2";
+const SCHEMA_VERSION = 1;
+const SELECT_ITEM = "minecraft:wooden_hoe";
+const MENU_ITEM = "minecraft:compass";
+const BRIDGE_OBJECTIVE = "gui_bridge";
+const BRIDGE_SELF = "myland";
+const BRIDGE_OTHER = "survival";
+const BRIDGE_TTL = 4;
+const BRIDGE_TAG_MENU = "bridge:myland_menu";
+const BRIDGE_TAG_ADMIN = "bridge:myland_admin";
+const MAX_WIDTH = 100;
+const MAX_LENGTH = 100;
+const MIN_SIDE = 5;
+const MAX_TOTAL_LANDS = 5000;
+const CHUNK_SIZE = 28000;
+const START_BALANCE = 20000;
+const CLAIM_PRICE_PER_BLOCK = 1;
+const TELEPORT_COOLDOWN_MS = 5000;
+const COMBAT_BLOCK_MS = 10000;
+const BORDER_DURATION_TICKS = 200;
+const BORDER_REFRESH_TICKS = 10;
+const BORDER_MAX_POINTS = 28;
+const MAX_BACKUPS = 5;
+
+const META_KEY = "myland:prod:v1:meta";
+const CHUNK_KEY = "myland:prod:v1:data:";
+const BACKUP_INDEX_KEY = "myland:prod:v1:backups";
+const BACKUP_META_PREFIX = "myland:prod:v1:backup:meta:";
+const BACKUP_DATA_PREFIX = "myland:prod:v1:backup:data:";
+
+function getBridgeObjective() {
+  try {
+    return world.scoreboard.getObjective(BRIDGE_OBJECTIVE) ?? world.scoreboard.addObjective(BRIDGE_OBJECTIVE, "插件菜单协同");
+  } catch {
+    return undefined;
+  }
+}
+function pulseBridge() {
+  const obj = getBridgeObjective();
+  if (!obj) return;
+  try {
+    obj.setScore(BRIDGE_SELF, BRIDGE_TTL);
+    const other = obj.getScore(BRIDGE_OTHER) ?? 0;
+    if (other > 0) obj.setScore(BRIDGE_OTHER, Math.max(0, other - 1));
+  } catch {}
+}
+function bridgeAlive(name) {
+  const obj = getBridgeObjective();
+  if (!obj) return false;
+  try { return (obj.getScore(name) ?? 0) > 0; } catch { return false; }
+}
+
+const DEFAULT_FLAGS = Object.freeze({
+  build: false,
+  container: false,
+  door: false,
+  switch: false,
+  redstone: false,
+  entity: false,
+  pvp: false,
+  explosion: false,
+  piston: false,
+  fluid: false,
+  fire: false,
+  visit: false,
+});
+const FLAG_NAMES = Object.keys(DEFAULT_FLAGS);
+const FLAG_DESCRIPTIONS = Object.freeze({
+  build: "允许陌生玩家放置/破坏方块",
+  container: "允许陌生玩家使用箱子、熔炉等容器",
+  door: "允许陌生玩家开关门、活板门、栅栏门",
+  switch: "允许陌生玩家使用按钮、拉杆等开关",
+  redstone: "允许陌生玩家操作红石相关方块",
+  entity: "允许陌生玩家与实体交互/攻击非玩家实体",
+  pvp: "允许陌生玩家在地皮内攻击玩家",
+  explosion: "允许爆炸破坏地皮方块",
+  piston: "允许跨地皮边界的活塞行为",
+  fluid: "允许陌生玩家使用水桶/岩浆桶等",
+  fire: "允许陌生玩家使用打火石/火焰弹",
+  visit: "允许其他玩家使用 /myland:visit 传送到此地皮",
+});
+const FLAG_PRESETS = Object.freeze({
+  private: { ...DEFAULT_FLAGS },
+  visit: { ...DEFAULT_FLAGS, visit: true, door: true, switch: true },
+  social: { ...DEFAULT_FLAGS, visit: true, door: true, switch: true, container: true, entity: true },
+  open: { ...DEFAULT_FLAGS, visit: true, build: true, container: true, door: true, switch: true, redstone: true, entity: true, pvp: true, fluid: true, fire: true },
+});
+
+let state = { version: SCHEMA_VERSION, nextId: 1, lands: [], economy: { balances: {} } };
+let loaded = false;
+let lastChunkCount = 0;
+const selections = new Map();
+const lastShownLand = new Map();
+const adminBypass = new Set();
+const teleportCooldownUntil = new Map();
+const combatUntil = new Map();
+const borderSessions = new Map();
+const lastSafeLocation = new Map();
+const pendingClaims = new Map();
+
+function logError(context, error) {
+  console.warn(`[myLand] ${context}: ${error?.stack ?? error}`);
+}
+
+function tell(player, message) {
+  try { player.sendMessage(`§6[地皮]§r ${message}`); }
+  catch (e) { logError("sendMessage", e); }
+}
+
+function isAdmin(player) {
+  try { return player.playerPermissionLevel === PlayerPermissionLevel.Operator; }
+  catch { return false; }
+}
+
+function ok(message) { return { status: CustomCommandStatus.Success, message }; }
+function fail(message) { return { status: CustomCommandStatus.Failure, message }; }
+function floor(n) { return Math.floor(Number(n)); }
+function cleanName(value, fallback = "未命名地皮") {
+  const text = String(value ?? "").trim().replace(/[\r\n§]/g, "");
+  return (text || fallback).slice(0, 32);
+}
+function cleanText(value, max = 120, fallback = "") {
+  const text = String(value ?? "").trim().replace(/[\r\n§]/g, " ").replace(/\s+/g, " ");
+  return (text || fallback).slice(0, max);
+}
+function uniqueNames(list) {
+  const out = [];
+  for (const v of Array.isArray(list) ? list : []) {
+    const n = cleanText(v, 40);
+    if (n && !out.some(x => nameEquals(x, n))) out.push(n);
+  }
+  return out;
+}
+function playerKey(name) { return String(name ?? "").toLowerCase(); }
+function nameEquals(a, b) { return playerKey(a) === playerKey(b); }
+function cloneFlags(raw) {
+  const result = { ...DEFAULT_FLAGS };
+  if (raw && typeof raw === "object") {
+    for (const key of FLAG_NAMES) if (typeof raw[key] === "boolean") result[key] = raw[key];
+  }
+  return result;
+}
+
+function normalizeLand(raw, fallbackId = 0) {
+  if (!raw || typeof raw !== "object") return undefined;
+  const x1 = Number(raw.x1), z1 = Number(raw.z1), x2 = Number(raw.x2), z2 = Number(raw.z2);
+  if (![x1, z1, x2, z2].every(Number.isFinite)) return undefined;
+  const owner = typeof raw.owner === "string" ? raw.owner : "";
+  if (!owner) return undefined;
+  const id = Number.isInteger(raw.id) && raw.id > 0 ? raw.id : fallbackId;
+  const trust = Array.isArray(raw.trust) ? [...new Set(raw.trust.filter(v => typeof v === "string" && v.trim()).map(v => v.trim()))] : [];
+  return {
+    id,
+    owner,
+    name: cleanName(raw.name, `地皮 #${id || "?"}`),
+    dimension: typeof raw.dimension === "string" ? raw.dimension : "minecraft:overworld",
+    x1: floor(Math.min(x1, x2)), z1: floor(Math.min(z1, z2)),
+    x2: floor(Math.max(x1, x2)), z2: floor(Math.max(z1, z2)),
+    createdAt: Number.isFinite(raw.createdAt) ? raw.createdAt : Date.now(),
+    trust,
+    blacklist: uniqueNames(raw.blacklist).filter(n => !nameEquals(n, owner)),
+    flags: cloneFlags(raw.flags),
+    description: cleanText(raw.description, 160),
+    welcome: cleanText(raw.welcome, 100),
+    farewell: cleanText(raw.farewell, 100),
+    publicListed: raw.publicListed === true,
+    forSale: raw.forSale === true && Number.isFinite(Number(raw.salePrice)) && Number(raw.salePrice) > 0,
+    salePrice: Math.max(0, Math.floor(Number(raw.salePrice) || 0)),
+    home: raw.home && [raw.home.x, raw.home.y, raw.home.z].every(Number.isFinite)
+      ? { x: Number(raw.home.x), y: Number(raw.home.y), z: Number(raw.home.z) }
+      : undefined,
+  };
+}
+
+function getNextFreeLandId(lands = state.lands) {
+  const used = new Set((lands ?? []).map(l => Number(l?.id)).filter(id => Number.isInteger(id) && id > 0));
+  let id = 1;
+  while (used.has(id)) id++;
+  return id;
+}
+function refreshNextId() {
+  state.nextId = getNextFreeLandId(state.lands);
+  return state.nextId;
+}
+
+function serializeState() { return JSON.stringify(state); }
+function emptyState() { return { version: SCHEMA_VERSION, nextId: 1, lands: [], economy: { balances: {} } }; }
+function parseState(text) {
+  const parsed = JSON.parse(text);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("invalid state root");
+  if (parsed.version !== SCHEMA_VERSION) throw new Error(`unsupported schema ${parsed.version}`);
+  if (!Array.isArray(parsed.lands)) throw new Error("invalid lands array");
+  if (!parsed.economy || typeof parsed.economy !== "object" || !parsed.economy.balances || typeof parsed.economy.balances !== "object") {
+    throw new Error("invalid economy data");
+  }
+  const lands = [];
+  const used = new Set();
+  for (const raw of parsed.lands) {
+    const land = normalizeLand(raw);
+    if (!land || !Number.isInteger(land.id) || land.id <= 0 || used.has(land.id)) throw new Error("invalid or duplicate land id");
+    used.add(land.id);
+    lands.push(land);
+  }
+  const balances = {};
+  for (const [key, value] of Object.entries(parsed.economy.balances)) {
+    const amount = Math.floor(Number(value));
+    if (key && Number.isFinite(amount) && amount >= 0) balances[String(key).toLowerCase()] = amount;
+  }
+  return { version: SCHEMA_VERSION, nextId: getNextFreeLandId(lands), lands, economy: { balances } };
+}
+
+function loadData() {
+  if (loaded) return;
+  loaded = true;
+  try {
+    const metaRaw = world.getDynamicProperty(META_KEY);
+    if (typeof metaRaw !== "string" || !metaRaw) {
+      state = emptyState();
+      return;
+    }
+    const meta = JSON.parse(metaRaw);
+    if (meta.version !== SCHEMA_VERSION) throw new Error(`unsupported meta schema ${meta.version}`);
+    const count = Number(meta.chunks);
+    if (!Number.isInteger(count) || count < 1) throw new Error("invalid chunk count");
+    let text = "";
+    for (let i = 0; i < count; i++) {
+      const part = world.getDynamicProperty(`${CHUNK_KEY}${i}`);
+      if (typeof part !== "string") throw new Error(`missing data chunk ${i}`);
+      text += part;
+    }
+    state = parseState(text);
+    lastChunkCount = count;
+  } catch (e) {
+    logError("读取正式版地皮数据失败，已启用空状态；请使用管理员备份/修复功能检查存档", e);
+    state = emptyState();
+    lastChunkCount = 0;
+  }
+}
+
+function saveData() {
+  if (!loaded) return false;
+  try {
+    refreshNextId();
+    const text = serializeState();
+    const count = Math.max(1, Math.ceil(text.length / CHUNK_SIZE));
+    for (let i = 0; i < count; i++) {
+      world.setDynamicProperty(`${CHUNK_KEY}${i}`, text.slice(i * CHUNK_SIZE, (i + 1) * CHUNK_SIZE));
+    }
+    for (let i = count; i < lastChunkCount; i++) world.setDynamicProperty(`${CHUNK_KEY}${i}`, undefined);
+    world.setDynamicProperty(META_KEY, JSON.stringify({ version: SCHEMA_VERSION, chunks: count, savedAt: Date.now() }));
+    lastChunkCount = count;
+    return true;
+  } catch (e) {
+    logError("保存地皮数据失败", e);
+    return false;
+  }
+}
+
+function getBackupIndex() {
+  try {
+    const raw = world.getDynamicProperty(BACKUP_INDEX_KEY);
+    const arr = typeof raw === "string" ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter(x => x && typeof x.id === "string") : [];
+  } catch { return []; }
+}
+function setBackupIndex(arr) { world.setDynamicProperty(BACKUP_INDEX_KEY, JSON.stringify(arr.slice(0, MAX_BACKUPS))); }
+function deleteBackup(id) {
+  try {
+    const metaRaw = world.getDynamicProperty(`${BACKUP_META_PREFIX}${id}`);
+    const meta = typeof metaRaw === "string" ? JSON.parse(metaRaw) : {};
+    const chunks = Math.max(0, Number(meta.chunks) || 0);
+    for (let i=0;i<chunks;i++) world.setDynamicProperty(`${BACKUP_DATA_PREFIX}${id}:${i}`, undefined);
+    world.setDynamicProperty(`${BACKUP_META_PREFIX}${id}`, undefined);
+  } catch (e) { logError("删除备份失败", e); }
+}
+function createBackup(reason = "手动备份", actor = "system") {
+  loadData();
+  try {
+    const id = Date.now().toString(36);
+    const text = serializeState();
+    const chunks = Math.max(1, Math.ceil(text.length / CHUNK_SIZE));
+    for (let i=0;i<chunks;i++) world.setDynamicProperty(`${BACKUP_DATA_PREFIX}${id}:${i}`, text.slice(i*CHUNK_SIZE,(i+1)*CHUNK_SIZE));
+    const meta = { id, createdAt: Date.now(), chunks, reason: cleanText(reason, 50), actor: cleanText(actor, 40), lands: state.lands.length };
+    world.setDynamicProperty(`${BACKUP_META_PREFIX}${id}`, JSON.stringify(meta));
+    const index = [meta, ...getBackupIndex().filter(x=>x.id!==id)];
+    while (index.length > MAX_BACKUPS) { const old=index.pop(); if(old) deleteBackup(old.id); }
+    setBackupIndex(index);
+    return meta;
+  } catch (e) { logError("创建备份失败", e); return undefined; }
+}
+function restoreBackup(id) {
+  try {
+    const metaRaw = world.getDynamicProperty(`${BACKUP_META_PREFIX}${id}`);
+    if (typeof metaRaw !== "string") return false;
+    const meta = JSON.parse(metaRaw);
+    let text="";
+    for(let i=0;i<Math.max(0,Number(meta.chunks)||0);i++){
+      const part=world.getDynamicProperty(`${BACKUP_DATA_PREFIX}${id}:${i}`);
+      if(typeof part!=="string") throw new Error(`missing backup chunk ${i}`);
+      text+=part;
+    }
+    const restored=parseState(text);
+    createBackup("恢复前自动备份", "system");
+    state=restored;
+    saveData();
+    return true;
+  } catch(e){logError("恢复备份失败",e);return false;}
+}
+function auditData() {
+  const ids=new Set(); let duplicateIds=0, overlapPairs=0, blacklistTrustConflicts=0, badSale=0;
+  for(const l of state.lands){
+    if(ids.has(l.id)) duplicateIds++; else ids.add(l.id);
+    blacklistTrustConflicts += (l.blacklist||[]).filter(b=>(l.trust||[]).some(t=>nameEquals(t,b))).length;
+    if(l.forSale && (!Number.isFinite(l.salePrice)||l.salePrice<=0)) badSale++;
+  }
+  for(let i=0;i<state.lands.length;i++) for(let j=i+1;j<state.lands.length;j++) if(overlaps(state.lands[i],state.lands[j])) overlapPairs++;
+  return { duplicateIds, overlapPairs, blacklistTrustConflicts, badSale, lands:state.lands.length, nextId:state.nextId };
+}
+function repairData() {
+  const backup=createBackup("自动修复前", "system");
+  const used=new Set(); let next=1, changed=0;
+  const repaired=[];
+  for(const raw of state.lands){
+    const l=normalizeLand(raw, next);
+    if(!l){changed++;continue;}
+    if(!Number.isInteger(l.id)||l.id<=0||used.has(l.id)){while(used.has(next))next++;l.id=next++;changed++;}
+    used.add(l.id); next=Math.max(next,l.id+1);
+    const beforeTrust=l.trust.length;
+    l.trust=l.trust.filter(n=>!l.blacklist.some(b=>nameEquals(b,n))&&!nameEquals(n,l.owner));
+    if(l.trust.length!==beforeTrust)changed++;
+    if(l.forSale && l.salePrice<=0){l.forSale=false;l.salePrice=0;changed++;}
+    repaired.push(l);
+  }
+  state.lands=repaired; state.nextId=getNextFreeLandId(state.lands); ensureEconomy(); state.version=SCHEMA_VERSION; saveData();
+  return { changed, backup, audit:auditData() };
+}
+
+function allLands() { return state.lands; }
+function getLandById(id) { return state.lands.find(l => l.id === Number(id)); }
+function getPlayerLands(name) { return state.lands.filter(l => nameEquals(l.owner, name)).sort((a,b) => a.id-b.id); }
+function pointInLand(location, dimensionId, land) {
+  return land.dimension === dimensionId &&
+    location.x >= land.x1 && location.x <= land.x2 &&
+    location.z >= land.z1 && location.z <= land.z2;
+}
+function getLandAt(location, dimensionId) { return state.lands.find(l => pointInLand(location, dimensionId, l)); }
+function overlaps(a, b) {
+  return a.dimension === b.dimension && a.x1 <= b.x2 && a.x2 >= b.x1 && a.z1 <= b.z2 && a.z2 >= b.z1;
+}
+function landSize(land) { return { width: land.x2-land.x1+1, length: land.z2-land.z1+1, area: (land.x2-land.x1+1)*(land.z2-land.z1+1) }; }
+function isOwner(player, land) { return !!player && nameEquals(player.name, land.owner); }
+function isTrusted(player, land) { return !!player && land.trust.some(n => nameEquals(n, player.name)); }
+function isBypass(player) { return !!player && adminBypass.has(playerKey(player.name)); }
+function isBlacklisted(player, land) {
+  if (!player || !land || isOwner(player, land) || isBypass(player)) return false;
+  return land.blacklist?.some(n => nameEquals(n, player.name)) === true;
+}
+function can(player, land, flag) {
+  if (!land) return true;
+  if (isOwner(player, land) || isBypass(player)) return true;
+  if (isBlacklisted(player, land)) return false;
+  if (isTrusted(player, land)) return true;
+  return land.flags?.[flag] === true;
+}
+function ensureEconomy() {
+  if (!state.economy || typeof state.economy !== "object") state.economy = { balances: {} };
+  if (!state.economy.balances || typeof state.economy.balances !== "object") state.economy.balances = {};
+}
+function getBalanceByName(name, initialize = true) {
+  ensureEconomy();
+  const key = playerKey(name);
+  if (!Object.prototype.hasOwnProperty.call(state.economy.balances, key) && initialize) state.economy.balances[key] = START_BALANCE;
+  return Math.max(0, Math.floor(Number(state.economy.balances[key]) || 0));
+}
+function setBalanceByName(name, value) {
+  ensureEconomy();
+  state.economy.balances[playerKey(name)] = Math.max(0, Math.floor(Number(value) || 0));
+}
+function addBalanceByName(name, delta) {
+  const next = getBalanceByName(name, true) + Math.floor(Number(delta) || 0);
+  setBalanceByName(name, next);
+  return getBalanceByName(name, false);
+}
+function formatMoney(value) { return `${Math.max(0, Math.floor(Number(value) || 0)).toLocaleString()} 金币`; }
+function claimCost(area) { return Math.max(0, Math.floor(area * CLAIM_PRICE_PER_BLOCK)); }
+function resolveOwnLand(player, id) {
+  if (Number.isInteger(id)) return state.lands.find(l => l.id === id && isOwner(player, l));
+  const here = getLandAt(player.location, player.dimension.id);
+  if (here && isOwner(player, here)) return here;
+  return getPlayerLands(player.name)[0];
+}
+function formatLand(land, detail = false) {
+  const s = landSize(land);
+  let text = `§e#${land.id} §f${land.name}§r | 地主: §e${land.owner}§r\n§7${land.dimension} | X ${land.x1}~${land.x2} | Z ${land.z1}~${land.z2} | ${s.width}×${s.length} = ${s.area}格§r`;
+  if (detail) {
+    text += `\n§7信任: ${land.trust.length ? land.trust.join(", ") : "无"}§r`;
+    text += `\n§7Flags: ${FLAG_NAMES.map(k => `${k}=${land.flags[k] ? "on" : "off"}`).join(" ")}§r`;
+  }
+  return text;
+}
+
+function interactionFlag(typeId) {
+  const id = String(typeId ?? "");
+  if (/chest|barrel|shulker|furnace|smoker|blast_furnace|hopper|dispenser|dropper|brewing_stand|crafter/.test(id)) return "container";
+  if (/door|trapdoor|fence_gate/.test(id)) return "door";
+  if (/button|lever|pressure_plate|tripwire/.test(id)) return "switch";
+  if (/repeater|comparator|redstone|daylight_detector|observer|piston|target/.test(id)) return "redstone";
+  return "build";
+}
