@@ -1,0 +1,506 @@
+import {
+  ButtonState,
+  CommandPermissionLevel,
+  CustomCommandStatus,
+  GameMode,
+  InputButton,
+  PlayerPermissionLevel,
+  system,
+  world
+} from "@minecraft/server";
+import { ActionFormData, MessageFormData, ModalFormData } from "@minecraft/server-ui";
+
+const PLUGIN_VERSION = "2.7.2";
+const MENU_ITEM = "minecraft:compass";
+const BRIDGE_OBJECTIVE = "gui_bridge";
+const BRIDGE_SELF = "survival";
+const BRIDGE_OTHER = "myland";
+const BRIDGE_TTL = 4;
+const BRIDGE_TAG_LAND_MENU = "bridge:myland_menu";
+const BRIDGE_TAG_LAND_ADMIN = "bridge:myland_admin";
+const TNT_ID = "minecraft:tnt";
+const NETHER_ID = "minecraft:nether";
+const BLOCK_INTERACTION_GUARD_TICKS = 2;
+const SURFACE_HELP_INTERVAL_TICKS = 1; // every tick for timely fall rescue
+const SURFACE_FALL_TRIGGER_TICKS = 8; // require sustained falling to avoid normal hops/steps
+const SURFACE_DANGEROUS_DROP = 5; // don't rescue short drops with a safe floor nearby
+const SURFACE_SAFE_SCAN_DEPTH = 16;
+const SURFACE_RESCUE_COOLDOWN_TICKS = 40;
+const TPA_EXPIRE_TICKS = 1200; // 60 seconds
+
+// Personal settings
+const PROP_TNT = "survival_helper:tnt_throw";
+const PROP_SURFACE = "survival_helper:surface_help";
+const PROP_HOME = "survival_helper:home"; // legacy single-home key, migrated once
+const PROP_HOMES = "survival_helper:homes_v2";
+const DEFAULT_PERSONAL_HOME_LIMIT = 6;
+const MAX_STORED_PERSONAL_HOMES = 100;
+const PROP_HOME_LIMIT = "survival_helper:home_limit";
+const PROP_DEATH = "survival_helper:last_death";
+const PROP_VEIN = "survival_helper:vein_mining";
+const PROP_TREE = "survival_helper:tree_felling";
+const PROP_ELEVATOR = "survival_helper:sneak_elevator";
+
+// Global administrator switches
+const PROP_GLOBAL_TNT = "survival_helper:global_tnt_throw";
+const PROP_GLOBAL_SURFACE = "survival_helper:global_surface_help";
+const PROP_GLOBAL_HOME = "survival_helper:global_home";
+const PROP_GLOBAL_DEATH = "survival_helper:global_death_return";
+const PROP_GLOBAL_TPA = "survival_helper:global_tpa";
+const PROP_GLOBAL_COORDS = "survival_helper:global_coord_share";
+const PROP_GLOBAL_VEIN = "survival_helper:global_vein_mining";
+const PROP_GLOBAL_TREE = "survival_helper:global_tree_felling";
+const PROP_GLOBAL_ELEVATOR = "survival_helper:global_sneak_elevator";
+
+// Per-player administrator permissions. Missing = allowed.
+const ALLOW_KEYS = {
+  tnt: "survival_helper:allow_tnt",
+  surface: "survival_helper:allow_surface",
+  home: "survival_helper:allow_home",
+  death: "survival_helper:allow_death",
+  tpa: "survival_helper:allow_tpa",
+  coords: "survival_helper:allow_coords",
+  vein: "survival_helper:allow_vein",
+  tree: "survival_helper:allow_tree",
+  elevator: "survival_helper:allow_elevator"
+};
+
+const netherTntAcknowledged = new Set(); // first TNT-use reminder acknowledged for current Nether stay
+const lastKnownDimension = new Map();
+const tntDimensionWarnUntil = new Map();
+const recentBlockInteraction = new Set();
+const openingMenu = new Set();
+const pendingDeathById = new Map();
+const tpaRequests = new Map(); // targetId -> Map(requesterId -> expiresAt)
+const lastSafeLocation = new Map(); // playerId -> { dimensionId, location }
+const surfaceFallTicks = new Map();
+const surfaceRescueCooldown = new Map();
+
+
+function getBridgeObjective() {
+  try {
+    return world.scoreboard.getObjective(BRIDGE_OBJECTIVE) ?? world.scoreboard.addObjective(BRIDGE_OBJECTIVE, "插件菜单协同");
+  } catch {
+    return undefined;
+  }
+}
+function pulseBridge() {
+  const obj = getBridgeObjective();
+  if (!obj) return;
+  try {
+    obj.setScore(BRIDGE_SELF, BRIDGE_TTL);
+    const other = obj.getScore(BRIDGE_OTHER) ?? 0;
+    if (other > 0) obj.setScore(BRIDGE_OTHER, Math.max(0, other - 1));
+  } catch {}
+}
+function bridgeAlive(name) {
+  const obj = getBridgeObjective();
+  if (!obj) return false;
+  try { return (obj.getScore(name) ?? 0) > 0; } catch { return false; }
+}
+
+// Native custom commands (Bedrock 26.45+).
+// Custom commands must be namespaced, so we use only the compact `sh:` namespace
+// and intentionally do not create duplicate aliases.
+function commandPlayer(origin) {
+  try {
+    const entity = origin.sourceEntity;
+    return entity?.typeId === "minecraft:player" ? entity : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function commandOk(message) {
+  return { status: CustomCommandStatus.Success, message };
+}
+
+function commandFail(message) {
+  return { status: CustomCommandStatus.Failure, message };
+}
+
+system.beforeEvents.startup.subscribe((event) => {
+  const registry = event.customCommandRegistry;
+
+  registry.registerCommand({
+    name: "sh:menu",
+    description: "打开生存辅助 GUI",
+    permissionLevel: CommandPermissionLevel.Any,
+    cheatsRequired: false
+  }, (origin) => {
+    const player = commandPlayer(origin);
+    if (!player) return commandFail("该指令只能由玩家执行。");
+    system.run(() => showMainMenu(player));
+    return commandOk("正在打开生存辅助菜单…");
+  });
+
+  registry.registerCommand({
+    name: "sh:help",
+    description: "查看生存辅助注册指令",
+    permissionLevel: CommandPermissionLevel.Any,
+    cheatsRequired: false
+  }, () => commandOk(
+    "生存辅助指令：/sh:menu 打开GUI；/sh:hello 测试插件；OP可用 /sh:opkit 获取管理工具。"
+  ));
+
+  registry.registerCommand({
+    name: "sh:hello",
+    description: "测试生存辅助插件是否正常运行",
+    permissionLevel: CommandPermissionLevel.Any,
+    cheatsRequired: false
+  }, (origin) => {
+    const player = commandPlayer(origin);
+    return commandOk(player ? `你好 ${player.name}，生存辅助 v${PLUGIN_VERSION} 正常运行。` : `生存辅助 v${PLUGIN_VERSION} 正常运行。`);
+  });
+
+  registry.registerCommand({
+    name: "sh:opkit",
+    description: "获取管理员常用工具（仅操作员）",
+    permissionLevel: CommandPermissionLevel.Admin,
+    cheatsRequired: true
+  }, (origin) => {
+    const player = commandPlayer(origin);
+    if (!player) return commandFail("该指令只能由玩家执行。");
+    system.run(() => {
+      const commands = [
+        "give @s diamond_sword",
+        "give @s command_block",
+        "give @s chain_command_block",
+        "give @s repeating_command_block",
+        "give @s structure_block",
+        "give @s structure_void",
+        "give @s barrier",
+        "give @s border_block",
+        "give @s light_block 64 15",
+        "give @s jigsaw"
+      ];
+      let ok = 0;
+      for (const cmd of commands) {
+        try {
+          player.runCommand(cmd);
+          ok++;
+        } catch (error) {
+          console.warn(`[生存辅助] OP工具发放失败 (${cmd}): ${error}`);
+        }
+      }
+      try { player.sendMessage(`§a[生存辅助] §f已发放管理员工具：${ok}/${commands.length}`); } catch {}
+    });
+    return commandOk("正在发放管理员工具…");
+  });
+});
+
+function boolProperty(target, key, defaultValue = true) {
+  try {
+    const value = target.getDynamicProperty(key);
+    return typeof value === "boolean" ? value : defaultValue;
+  } catch {
+    return defaultValue;
+  }
+}
+
+function setBoolProperty(target, key, value) {
+  try {
+    target.setDynamicProperty(key, value);
+    return true;
+  } catch (error) {
+    console.warn(`[生存辅助] 保存设置失败 (${key}): ${error}`);
+    return false;
+  }
+}
+
+function getStringProperty(target, key) {
+  try {
+    const value = target.getDynamicProperty(key);
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function setStringProperty(target, key, value) {
+  try {
+    target.setDynamicProperty(key, value);
+    return true;
+  } catch (error) {
+    console.warn(`[生存辅助] 保存数据失败 (${key}): ${error}`);
+    return false;
+  }
+}
+
+function clearProperty(target, key) {
+  try {
+    target.setDynamicProperty(key, undefined);
+  } catch (error) {
+    console.warn(`[生存辅助] 清除数据失败 (${key}): ${error}`);
+  }
+}
+
+function isAdmin(player) {
+  try {
+    return player.playerPermissionLevel === PlayerPermissionLevel.Operator;
+  } catch {
+    return false;
+  }
+}
+
+function statusText(enabled) {
+  return enabled ? "§a开启" : "§c关闭";
+}
+
+function allowedFor(player, allowKey) {
+  return !allowKey || boolProperty(player, allowKey, true);
+}
+
+function featureEnabled(player, globalKey, personalKey, allowKey) {
+  if (!boolProperty(world, globalKey, true)) return false;
+  if (!allowedFor(player, allowKey)) return false;
+  return personalKey ? boolProperty(player, personalKey, true) : true;
+}
+
+function tntEnabledFor(player) {
+  return featureEnabled(player, PROP_GLOBAL_TNT, PROP_TNT, ALLOW_KEYS.tnt);
+}
+
+function surfaceEnabledFor(player) {
+  return featureEnabled(player, PROP_GLOBAL_SURFACE, PROP_SURFACE, ALLOW_KEYS.surface);
+}
+
+
+function veinEnabledFor(player) {
+  return featureEnabled(player, PROP_GLOBAL_VEIN, PROP_VEIN, ALLOW_KEYS.vein);
+}
+
+function treeEnabledFor(player) {
+  return featureEnabled(player, PROP_GLOBAL_TREE, PROP_TREE, ALLOW_KEYS.tree);
+}
+
+function elevatorEnabledFor(player) {
+  return featureEnabled(player, PROP_GLOBAL_ELEVATOR, PROP_ELEVATOR, ALLOW_KEYS.elevator);
+}
+
+const ORE_IDS = new Set([
+  "minecraft:coal_ore", "minecraft:deepslate_coal_ore",
+  "minecraft:iron_ore", "minecraft:deepslate_iron_ore",
+  "minecraft:copper_ore", "minecraft:deepslate_copper_ore",
+  "minecraft:gold_ore", "minecraft:deepslate_gold_ore",
+  "minecraft:redstone_ore", "minecraft:lit_redstone_ore", "minecraft:deepslate_redstone_ore", "minecraft:lit_deepslate_redstone_ore",
+  "minecraft:lapis_ore", "minecraft:deepslate_lapis_ore",
+  "minecraft:diamond_ore", "minecraft:deepslate_diamond_ore",
+  "minecraft:emerald_ore", "minecraft:deepslate_emerald_ore",
+  "minecraft:nether_gold_ore", "minecraft:quartz_ore", "minecraft:ancient_debris"
+]);
+
+const ORE_FAMILY = new Map([
+  ["minecraft:coal_ore", "coal"], ["minecraft:deepslate_coal_ore", "coal"],
+  ["minecraft:iron_ore", "iron"], ["minecraft:deepslate_iron_ore", "iron"],
+  ["minecraft:copper_ore", "copper"], ["minecraft:deepslate_copper_ore", "copper"],
+  ["minecraft:gold_ore", "gold"], ["minecraft:deepslate_gold_ore", "gold"],
+  ["minecraft:redstone_ore", "redstone"], ["minecraft:lit_redstone_ore", "redstone"],
+  ["minecraft:deepslate_redstone_ore", "redstone"], ["minecraft:lit_deepslate_redstone_ore", "redstone"],
+  ["minecraft:lapis_ore", "lapis"], ["minecraft:deepslate_lapis_ore", "lapis"],
+  ["minecraft:diamond_ore", "diamond"], ["minecraft:deepslate_diamond_ore", "diamond"],
+  ["minecraft:emerald_ore", "emerald"], ["minecraft:deepslate_emerald_ore", "emerald"],
+  ["minecraft:nether_gold_ore", "nether_gold"], ["minecraft:quartz_ore", "quartz"],
+  ["minecraft:ancient_debris", "ancient_debris"]
+]);
+
+const LOG_IDS = new Set([
+  "minecraft:oak_log", "minecraft:spruce_log", "minecraft:birch_log", "minecraft:jungle_log",
+  "minecraft:acacia_log", "minecraft:dark_oak_log", "minecraft:mangrove_log", "minecraft:cherry_log",
+  "minecraft:pale_oak_log", "minecraft:crimson_stem", "minecraft:warped_stem"
+]);
+
+const PICKAXE_IDS = new Set([
+  "minecraft:wooden_pickaxe", "minecraft:stone_pickaxe", "minecraft:copper_pickaxe",
+  "minecraft:iron_pickaxe", "minecraft:golden_pickaxe", "minecraft:diamond_pickaxe", "minecraft:netherite_pickaxe"
+]);
+
+const AXE_IDS = new Set([
+  "minecraft:wooden_axe", "minecraft:stone_axe", "minecraft:copper_axe",
+  "minecraft:iron_axe", "minecraft:golden_axe", "minecraft:diamond_axe", "minecraft:netherite_axe"
+]);
+
+const CHAIN_BATCH_SIZE = 4;
+const CHAIN_MAX_RADIUS = 8;
+
+function sameChainFamily(startId, candidateId, kind) {
+  if (kind === "ore") return ORE_FAMILY.get(candidateId) === ORE_FAMILY.get(startId);
+  if (kind === "log") return candidateId === startId;
+  return false;
+}
+
+function getHeldItem(player) {
+  try {
+    const inventory = player.getComponent("minecraft:inventory");
+    const container = inventory?.container;
+    if (!container) return undefined;
+    return container.getItem(player.selectedSlotIndex);
+  } catch {
+    return undefined;
+  }
+}
+
+function hasCorrectChainTool(player, kind) {
+  const item = getHeldItem(player);
+  if (!item) return false;
+  return kind === "ore" ? PICKAXE_IDS.has(item.typeId) : AXE_IDS.has(item.typeId);
+}
+
+function getUnbreakingLevel(item) {
+  try {
+    const enchantable = item.getComponent("minecraft:enchantable");
+    if (!enchantable) return 0;
+    return enchantable.getEnchantment("unbreaking")?.level ?? enchantable.getEnchantment("minecraft:unbreaking")?.level ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+function damageHeldTool(player, expectedTypeId, expectedSlot) {
+  try {
+    if (player.getGameMode() === GameMode.Creative) return true;
+    if (player.selectedSlotIndex !== expectedSlot) return false;
+
+    const inventory = player.getComponent("minecraft:inventory");
+    const container = inventory?.container;
+    if (!container) return false;
+    const item = container.getItem(expectedSlot);
+    if (!item || item.typeId !== expectedTypeId) return false;
+
+    const durability = item.getComponent("minecraft:durability");
+    if (!durability || durability.unbreakable) return true;
+
+    const unbreaking = Math.max(0, Math.min(3, getUnbreakingLevel(item)));
+    const damageChance = durability.getDamageChance(unbreaking);
+    if (Math.random() * 100 >= damageChance) return true;
+
+    if (durability.damage + 1 >= durability.maxDurability) {
+      container.setItem(expectedSlot, undefined);
+      try { player.playSound("random.break"); } catch {}
+      return false;
+    }
+
+    durability.damage += 1;
+    container.setItem(expectedSlot, item);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function collectChainBlocks(dimension, origin, startId, kind, maxBlocks) {
+  const queue = [{ x: origin.x, y: origin.y, z: origin.z }];
+  const seen = new Set([`${origin.x},${origin.y},${origin.z}`]);
+  const result = [];
+
+  while (queue.length && result.length < maxBlocks) {
+    const current = queue.shift();
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dz = -1; dz <= 1; dz++) {
+          if (dx === 0 && dy === 0 && dz === 0) continue;
+          const loc = { x: current.x + dx, y: current.y + dy, z: current.z + dz };
+          const key = `${loc.x},${loc.y},${loc.z}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+
+          // Keep tree felling local to the trunk and avoid chasing decorative structures too far.
+          if (kind === "log") {
+            if (loc.y < origin.y - 1) continue;
+            if (Math.abs(loc.x - origin.x) > CHAIN_MAX_RADIUS || Math.abs(loc.z - origin.z) > CHAIN_MAX_RADIUS) continue;
+          }
+
+          try {
+            const block = dimension.getBlock(loc);
+            if (!block || !sameChainFamily(startId, block.typeId, kind)) continue;
+            result.push(loc);
+            queue.push(loc);
+            if (result.length >= maxBlocks) return result;
+          } catch {}
+        }
+      }
+    }
+  }
+  return result;
+}
+
+function startChainBreak(player, origin, startId, kind, maxBlocks) {
+  if (!hasCorrectChainTool(player, kind)) {
+    player.sendMessage(kind === "ore" ? "§e[连锁挖矿] 请使用镐触发连锁挖矿。" : "§e[连锁砍树] 请使用斧触发连锁砍树。");
+    return;
+  }
+
+  const dimension = player.dimension;
+  const dimensionId = dimension.id;
+  const held = getHeldItem(player);
+  if (!held) return;
+  const toolTypeId = held.typeId;
+  const toolSlot = player.selectedSlotIndex;
+  const targets = collectChainBlocks(dimension, origin, startId, kind, maxBlocks);
+  if (targets.length === 0) return;
+
+  let index = 0;
+  let broken = 0;
+
+  const processBatch = () => {
+    if (!player?.isValid || player.dimension.id !== dimensionId || player.selectedSlotIndex !== toolSlot) {
+      if (broken > 0) player?.sendMessage?.(`§7[生存辅助] 连锁已停止，共额外处理 ${broken} 个方块。`);
+      return;
+    }
+
+    let processedThisTick = 0;
+    while (index < targets.length && processedThisTick < CHAIN_BATCH_SIZE) {
+      const loc = targets[index++];
+      processedThisTick++;
+
+      try {
+        const currentTool = getHeldItem(player);
+        if (!currentTool || currentTool.typeId !== toolTypeId) break;
+
+        const block = dimension.getBlock(loc);
+        if (!block || !sameChainFamily(startId, block.typeId, kind)) continue;
+
+        // Run /loot as the triggering player so `mainhand` resolves to that player's actual tool.
+        // Only remove the block after loot generation succeeds, preventing silent item loss.
+        player.runCommand(`loot spawn ${loc.x + 0.5} ${loc.y + 0.5} ${loc.z + 0.5} mine ${loc.x} ${loc.y} ${loc.z} mainhand`);
+        block.setType("minecraft:air");
+        broken++;
+
+        if (!damageHeldTool(player, toolTypeId, toolSlot)) {
+          player.sendMessage(`§e[生存辅助] 工具已损坏，连锁自动停止。`);
+          if (broken > 0) player.sendMessage(`§a[${kind === "ore" ? "连锁挖矿" : "连锁砍树"}] §f额外处理 ${broken} 个方块。`);
+          return;
+        }
+      } catch (error) {
+        console.warn(`[生存辅助] 连锁处理失败: ${error}`);
+      }
+    }
+
+    if (index < targets.length) {
+      system.run(processBatch);
+    } else if (broken > 0) {
+      player.sendMessage(`§a[${kind === "ore" ? "连锁挖矿" : "连锁砍树"}] §f额外处理 ${broken} 个方块。`);
+    }
+  };
+
+  system.run(processBatch);
+}
+
+function blockIsPassable(block) {
+  if (!block) return false;
+  return block.typeId === "minecraft:air" || block.typeId === "minecraft:cave_air" || block.typeId === "minecraft:void_air";
+}
+
+function blockIsFloor(block) {
+  return !!block && !blockIsPassable(block) && !block.isLiquid;
+}
+
+function tryElevatorUp(player) {
+  if (!elevatorEnabledFor(player) || !player.isSneaking) return;
+  const x = Math.floor(player.location.x);
+  const z = Math.floor(player.location.z);
+  const startY = Math.floor(player.location.y);
+
+  for (let y = startY + 2; y <= startY + 32; y++) {
+    try {
+      const floor = player.dimension.getBlock({ x, y, z });
