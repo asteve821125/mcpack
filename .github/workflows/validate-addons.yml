@@ -1,0 +1,66 @@
+name: Validate Bedrock Addons
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'myLand/**'
+      - 'SurvivalHelper/**'
+      - 'PlayerShop/**'
+      - '.github/workflows/validate-addons.yml'
+  pull_request:
+    paths:
+      - 'myLand/**'
+      - 'SurvivalHelper/**'
+      - 'PlayerShop/**'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Rebuild sources
+        run: |
+          python myLand/rebuild.py
+          python SurvivalHelper/rebuild.py
+          python PlayerShop/rebuild.py
+
+      - name: Validate JavaScript
+        run: |
+          node --check myLand/scripts/main.js
+          node --check SurvivalHelper/scripts/main.js
+          node --check PlayerShop/scripts/main.js
+
+      - name: Validate manifests
+        run: |
+          python -m json.tool myLand/manifest.json >/dev/null
+          python -m json.tool SurvivalHelper/manifest.json >/dev/null
+          python -m json.tool PlayerShop/manifest.json >/dev/null
+
+      - name: Build mcpack files
+        run: |
+          mkdir -p dist/myLand/scripts dist/SurvivalHelper/scripts dist/PlayerShop/scripts
+          cp myLand/manifest.json dist/myLand/manifest.json
+          cp myLand/scripts/main.js dist/myLand/scripts/main.js
+          cp SurvivalHelper/manifest.json dist/SurvivalHelper/manifest.json
+          cp SurvivalHelper/scripts/main.js dist/SurvivalHelper/scripts/main.js
+          cp PlayerShop/manifest.json dist/PlayerShop/manifest.json
+          cp PlayerShop/scripts/main.js dist/PlayerShop/scripts/main.js
+          (cd dist/myLand && zip -r ../myLand_v4.2.0.mcpack .)
+          (cd dist/SurvivalHelper && zip -r ../SurvivalHelper_v2.8.0.mcpack .)
+          (cd dist/PlayerShop && zip -r ../PlayerShop_v1.0.0.mcpack .)
+
+      - name: Upload built packs
+        uses: actions/upload-artifact@v4
+        with:
+          name: bedrock-addons
+          path: |
+            dist/*.mcpack
