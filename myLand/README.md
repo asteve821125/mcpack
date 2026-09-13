@@ -2,7 +2,7 @@
 
 Minecraft Bedrock 26.45 地皮系统。
 
-当前仓库快照：**v4.1.2**。
+当前版本：**v4.2.0**。
 
 ## 固定包身份
 
@@ -11,18 +11,16 @@ Minecraft Bedrock 26.45 地皮系统。
 - Header UUID: `564362d8-058b-4dff-8f02-16b35534e943`
 - Data Module UUID: `861a17e6-981b-4db4-935b-99d047d83caf`
 - Script Module UUID: `e40f815c-af98-47ac-a1df-8913a4d3d3c7`
-- 当前 manifest version: `[1,1,2]`
+- 当前 manifest version: `[1,2,0]`
 
 依赖：
 
 - `@minecraft/server` `2.9.0`
 - `@minecraft/server-ui` `2.1.0`
 
-## 源码
+## 源码重建
 
-当前连接器以 UTF-8 文本方式写入 GitHub，因此 `scripts/main.js` 的精确源码按顺序存放在：
-
-`source/main.part01.js.txt` ... `source/main.part05.js.txt`
+`source/` 保留 v4.1.2 的完整 UTF-8 源码分片，`upgrade_v420.py` 是确定性的 v4.2.0 升级补丁。
 
 执行：
 
@@ -30,17 +28,24 @@ Minecraft Bedrock 26.45 地皮系统。
 python rebuild.py
 ```
 
-会生成 `scripts/main.js`。这些分片按文件名顺序直接拼接即可还原当前脚本。
+会先拼接 `source/main.part*.js.txt`，再自动应用 `upgrade_v420.py`，最终生成当前正式版 `scripts/main.js`。
 
-## 当前重点功能
+## v4.2.0 重点变化
 
-- 指南针统一“服务器辅助”总菜单
-- 与 SurvivalHelper 独立安装或合装均可使用
-- 跨插件菜单使用 scoreboard 心跳 + 临时玩家标签，不通过跨包 `runCommand`
+- 公共金币改为 scoreboard objective：`server_money`。
+- 首次升级会把旧 `state.economy.balances` 一次性迁移到共享金币，并用 `server_economy_meta` 标记，避免重复覆盖。
+- 与 PlayerShop 使用同一份金币，myLand 卸载不会删除公共余额。
+- 指南针总菜单可同时识别 `survival` / `shop`。
+- 管理员中心可同时进入地皮、生存辅助和玩家商店管理。
+- 共享 `playershop_blocks` 保护索引：已登记商店箱子/告示牌由 PlayerShop 优先处理，避免 myLand 的普通容器/破坏规则与商店冲突。
+- PlayerShop 创建商店时可通过短期 tag 请求 myLand 判断“是否为创建者自己的地皮”；不直接读取 myLand 数据文件。
+
+## 现有功能
+
 - 地皮 GUI / 管理员 GUI
 - 木锄 X/Z 圈地、Y 全高度保护
 - 信任、黑名单、Flags
-- 经济、公开大厅、地皮出售/购买
+- 公共金币、公开大厅、地皮出售/购买
 - 欢迎语、离开语、地皮描述
 - 安全传送、冷却、战斗限制
 - 低频边界粒子
@@ -54,5 +59,3 @@ python rebuild.py
 3. 保持 `entry: scripts/main.js`。
 4. 发布前检查 JavaScript 语法、manifest、依赖和包根目录结构。
 5. 只有明确要作为全新插件身份安装时才整套更换 UUID。
-
-> `pack.icon.png` 属于二进制文件，当前 ChatGPT GitHub 写入接口没有直接从本地上传二进制附件的能力，因此本目录暂不包含图标；这不影响后续从仓库直接维护源码。
