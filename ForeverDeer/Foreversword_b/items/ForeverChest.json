@@ -1,0 +1,21 @@
+{
+  "format_version": "1.20.60",
+  "minecraft:item": {
+    "description": {
+      "identifier": "mc:ForeverChest",
+      "menu_category": {"category":"equipment","group":"itemGroup.name.chestplate"}
+    },
+    "components": {
+      "minecraft:icon": {"textures":{"default":"ForeverChest"}},
+      "minecraft:display_name": {"value":"*永恒胸甲*"},
+      "minecraft:max_stack_size": 1,
+      "minecraft:creative_category": {"parent":"itemGroup.name.chestplate"},
+      "minecraft:wearable": {"slot":"slot.armor.chest","protection":100},
+      "minecraft:durability": {"max_durability":10000},
+      "minecraft:glint": true,
+      "minecraft:hover_text_color": "yellow",
+      "minecraft:enchantable": {"value":200,"slot":"armor_torso"},
+      "minecraft:tags": {"tags":["minecraft:is_chest"]}
+    }
+  }
+}

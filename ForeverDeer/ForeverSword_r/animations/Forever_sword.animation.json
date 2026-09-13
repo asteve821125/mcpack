@@ -1,0 +1,25 @@
+{
+	"format_version": "1.8.0",
+	"animations": {
+		"animation.Forever_sword.first_person_hold": {
+			"loop": true,
+			"bones": {
+				"root_Item": {
+					"rotation": [150.57076, -89.10013, 35.32436],
+					"position": [3, 9, 13],
+					"scale": 2
+				}
+			}
+		},
+		"animation.Forever_sword.third_person_hold": {
+			"loop": true,
+			"bones": {
+				"root_Item": {
+					"rotation": [90.88726, -90.2855, 94.26476],
+					"position": [0, 15.5, -6.5],
+					"scale": 1.5
+				}
+			}
+		}
+	}
+}

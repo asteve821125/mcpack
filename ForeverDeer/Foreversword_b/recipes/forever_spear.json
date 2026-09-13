@@ -1,0 +1,10 @@
+{
+  "format_version": "1.12",
+  "minecraft:recipe_shaped": {
+    "description": {"identifier":"mc:forever_spear_recipes"},
+    "tags": ["crafting_table"],
+    "pattern": [" B "," C "," A "],
+    "key": {"A":{"item":"minecraft:stick"},"B":{"item":"minecraft:iron_ingot"},"C":{"item":"minecraft:blaze_rod"}},
+    "result": {"item":"mc:forever_spear","count":1}
+  }
+}

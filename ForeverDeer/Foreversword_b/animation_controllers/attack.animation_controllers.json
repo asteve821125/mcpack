@@ -1,0 +1,30 @@
+{
+  "format_version": "1.10.0",
+  "animation_controllers": {
+    "controller.animation.mc.forever_spear.attack": {
+      "initial_state": "default",
+      "states": {
+        "default": {
+          "animations": [
+            "first_person_hold"
+          ],
+          "transitions": [
+            {
+              "attack": "query.is_using_item"
+            }
+          ]
+        },
+        "attack": {
+          "animations": [
+            "attack"
+          ],
+          "transitions": [
+            {
+              "default": "query.any_animation_finished"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+	"format_version": "1.8.0",
+	"animations": {
+		"animation.mc.forever_spear.first_person_hold": {
+			"loop": true,
+			"bones": {
+				"bb_main": {
+					"rotation": [8,6,0],
+					"position": [0,-17,8],
+					"scale": 2.5
+				}
+			}
+		},
+		"animation.mc.forever_spear.third_person_hold": {
+			"loop": true,
+			"bones": {
+				"bb_main": {
+					"rotation": [2,0,0],
+					"position": [-6,-4,-4],
+					"scale": 3
+				}
+			}
+		},
+		"animation.mc.forever_spear.attack": {
+			"loop": false,
+			"animation_length": 1,
+			"bones": {
+				"bb_main": {
+					"rotation": [0,-60,0],
+					"position": [0,0,-2],
+					"scale": 2.5
+				}
+			}
+		}
+	}
+}

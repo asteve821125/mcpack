@@ -1,0 +1,20 @@
+{
+    "format_version": "1.10.0",
+    "minecraft:attachable": {
+        "description": {
+            "identifier": "mc:forever_spear",
+            "scripts": {
+                "animate": [
+                    "attack",
+                    "first_person_hold",
+                    "third_person_hold"
+                ]
+            },
+            "animations": {
+                "attack": "controller.animation.mc.forever_spear.attack",
+                "first_person_hold": "controller.animation.mc.forever_spear.first_person_hold",
+                "third_person_hold": "controller.animation.mc.forever_spear.third_person_hold"
+            }
+        }
+    }
+}

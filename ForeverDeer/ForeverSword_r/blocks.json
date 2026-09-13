@@ -1,0 +1,7 @@
+{
+  "format_version": [1,21,20],
+  "deer_block": {
+    "textures": {"up":"deer_block","down":"deer_block","north":"deer_block_side","south":"deer_block_side","west":"deer_block_side","east":"deer_block_side"}
+  },
+  "bedrock_slab": {"textures":"bedrock_slab"}
+}

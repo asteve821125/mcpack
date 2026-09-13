@@ -1,0 +1,10 @@
+{
+  "texture_data": {
+    "ForeverChest": {"textures":"textures/items/ForeverChest"},
+    "fs": {"textures":"textures/items/fs"},
+    "bow": {"textures":"textures/items/bow"},
+    "forever_spear": {"textures":"textures/items/forever_spear"}
+  },
+  "resource_pack_name": "vanilla",
+  "texture_name": "atlas.items"
+}

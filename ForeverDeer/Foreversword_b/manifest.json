@@ -1,0 +1,10 @@
+{
+  "format_version": 2,
+  "header": {"name":"ForeverSword","description":"为一直陪伴支持我的人制作","uuid":"6198d465-1cc9-4325-8e34-d168b99da384","version":[1,0,0],"min_engine_version":[1,20,50],"author":"ForeverDeer"},
+  "modules": [{"description":"Design in 2025/1/19","type":"data","uuid":"20f85274-4a0d-4ad4-805e-e45625ea6701","version":[1,0,0]}],
+  "dependencies": [
+    {"uuid":"7ab1c2a0-4df9-4ba5-b3da-b250cf976fd6","version":[1,0,0]},
+    {"module_name":"@minecraft/server","version":"1.11.0"},
+    {"module_name":"@minecraft/server-ui","version":"1.1.0"}
+  ]
+}

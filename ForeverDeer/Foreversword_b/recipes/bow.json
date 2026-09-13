@@ -1,0 +1,11 @@
+{
+  "format_version": "1.20.50",
+  "minecraft:recipe_shaped": {
+    "description": {"identifier":"mc:Forever_bow"},
+    "tags": ["crafting_table"],
+    "pattern": [" BS","B S"," BS"],
+    "key": {"B":{"item":"minecraft:blaze_rod"},"S":{"item":"minecraft:string"}},
+    "result": {"item":"mc:Forever_bow","count":1},
+    "unlock": [{"item":"minecraft:blaze_rod","amount":1}]
+  }
+}

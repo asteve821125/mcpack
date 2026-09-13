@@ -1,0 +1,10 @@
+{
+  "format_version": "1.12",
+  "minecraft:recipe_shaped": {
+    "description": {"identifier":"Deer:Forever_sword_recipes"},
+    "tags": ["crafting_table"],
+    "pattern": [" B "," B "," A "],
+    "key": {"A":{"item":"minecraft:stick"},"B":{"item":"minecraft:diamond_block"}},
+    "result": {"item":"Deer:Forever_sword","count":1}
+  }
+}

@@ -1,0 +1,6 @@
+{
+    "format_version": 2,
+    "header": {"name":"ForeverSword","description":"与其行为包合用的一把剑","uuid":"7ab1c2a0-4df9-4ba5-b3da-b250cf976fd6","authors":"ForeverDeer","version":[1,0,0],"min_engine_version":[1,20,50]},
+    "modules": [{"description":"Design in 2025/1/19","type":"resources","uuid":"ae178690-7DDB-484c-9904-e3b543615676","version":[1,0,0]}],
+    "dependencies": [{"uuid":"6198d465-1cc9-4325-8e34-d168b99da384","version":[1,0,0]}]
+}
